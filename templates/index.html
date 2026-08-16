@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0a0d">
+  <title>Gerador de Arte de Campanha</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-mask="rosa">
+  <main class="app-shell">
+    <header class="app-header">
+      <h1>Monte sua foto com GD!</h1>
+      <p>Escolha um modelo e envie uma foto já com fundo branco, transparente ou recortada. Depois é só ajustar o enquadramento.</p>
+    </header>
+
+    <section class="template-section" aria-labelledby="templateTitle">
+      <div class="section-heading">
+        <strong id="templateTitle">1. Escolha o modelo</strong>
+        <span>A troca não altera o enquadramento da foto</span>
+      </div>
+
+      <div class="template-grid" role="radiogroup" aria-label="Modelos de campanha">
+        <label class="template-card">
+          <input
+            class="sr-only template-radio"
+            type="radio"
+            name="campaignMask"
+            value="rosa"
+            checked
+          >
+          <span class="template-preview">
+            <img src="{{ url_for('static', filename='img/mascara-rosa.png') }}" alt="Prévia do modelo rosa">
+            <span class="check-badge" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </span>
+          <span class="template-name">Modelo Rosa</span>
+        </label>
+
+        <label class="template-card">
+          <input
+            class="sr-only template-radio"
+            type="radio"
+            name="campaignMask"
+            value="azul"
+          >
+          <span class="template-preview">
+            <img src="{{ url_for('static', filename='img/mascara-azul.png') }}" alt="Prévia do modelo azul">
+            <span class="check-badge" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </span>
+          <span class="template-name">Modelo Azul</span>
+        </label>
+      </div>
+    </section>
+
+    <div class="editor-column">
+      <section class="editor-card" aria-label="Editor da arte">
+        <div class="section-heading section-heading--tight">
+          <strong>2. Ajuste a foto</strong>
+          <span id="editorHint">Arraste, use dois dedos ou o controle de zoom</span>
+        </div>
+
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas
+            id="artCanvas"
+            width="1080"
+            height="1080"
+            tabindex="0"
+            role="application"
+            aria-label="Área de edição da foto. Use as setas do teclado para mover e as teclas mais e menos para o zoom."
+          ></canvas>
+
+          <div class="guide guide-v" id="guideV" aria-hidden="true"></div>
+          <div class="guide guide-h" id="guideH" aria-hidden="true"></div>
+
+          <label class="empty-state" id="emptyState" for="photoInput">
+            <span class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 15V4M12 4L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v2.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <strong>Toque para adicionar sua foto</strong>
+            <span>JPG, PNG ou WEBP · fundo branco, transparente ou já recortado · até 15 MB</span>
+          </label>
+
+          <div class="processing" id="processing" hidden>
+            <div class="spinner" aria-hidden="true"></div>
+            <strong id="processingTitle">Carregando…</strong>
+            <span id="processingText"></span>
+          </div>
+        </div>
+
+        <input
+          id="photoInput"
+          class="sr-only"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+        >
+
+        <div class="primary-controls" id="primaryControls">
+          <label class="button button-secondary" for="photoInput" id="photoButton">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4M12 4L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v2.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Enviar foto</span>
+          </label>
+        </div>
+
+        <div class="adjustments" id="adjustments" hidden>
+          <div class="control-row">
+            <label id="zoomLabel" for="zoomRange">Zoom</label>
+            <output id="zoomValue" for="zoomRange">100%</output>
+          </div>
+
+          <div class="zoom-control">
+            <button type="button" class="zoom-step" id="zoomDec" aria-label="Diminuir zoom">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <input id="zoomRange" type="range" min="50" max="250" value="100" step="1" aria-label="Zoom da foto">
+            <button type="button" class="zoom-step" id="zoomInc" aria-label="Aumentar zoom">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+
+          <div class="secondary-actions">
+            <button class="text-button" type="button" id="resetButton">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+              <span>Centralizar</span>
+            </button>
+            <label class="text-button" for="photoInput">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M17 3v4h-4M7 21v-4h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>Trocar foto</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <button class="button button-primary download-button" type="button" id="downloadButton" disabled>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v1.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Baixar imagem 1080×1080</span>
+      </button>
+    </div>
+
+    <p class="privacy-note">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.5"/></svg>
+      A foto é processada pelo servidor deste projeto e não é salva em disco pelo aplicativo.
+    </p>
+
+    <img
+      id="maskRosa"
+      src="{{ url_for('static', filename='img/mascara-rosa.png') }}"
+      alt=""
+      hidden
+      crossorigin="anonymous"
+    >
+    <img
+      id="maskAzul"
+      src="{{ url_for('static', filename='img/mascara-azul.png') }}"
+      alt=""
+      hidden
+      crossorigin="anonymous"
+    >
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span class="toast-icon" id="toastIcon" aria-hidden="true"></span>
+    <span id="toastMessage"></span>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/editor.js') }}" defer></script>
+</body>
+</html>

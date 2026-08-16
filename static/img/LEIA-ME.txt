@@ -1,0 +1,7 @@
+Modelos de máscara usados pelo projeto:
+
+- mascara-rosa.png
+- mascara-azul.png
+
+Ambos podem ser substituídos por novos PNGs transparentes mantendo os mesmos nomes.
+O backend redimensiona automaticamente as máscaras para 1080x1080 na exportação final.
