@@ -2,6 +2,9 @@
   "use strict";
 
   const SIZE = 1080;
+  const MAX_WORK_SIDE = 2800;
+  const MAX_FALLBACK_PIXELS = 16_000_000;
+  const MAX_FALLBACK_SIDE = 4096;
   const canvas = document.getElementById("artCanvas");
   const canvasWrap = document.getElementById("canvasWrap");
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -41,6 +44,8 @@
   let selectedMask =
     document.querySelector(".template-radio:checked")?.value || "rosa";
   let personImage = null;
+  let personW = 0;
+  let personH = 0;
   let processedBlob = null;
   let personUrl = null;
   let isBusy = false;
@@ -58,8 +63,8 @@
 
   function clampPerson() {
     if (!personImage) return;
-    const width = personImage.naturalWidth * person.scale;
-    const height = personImage.naturalHeight * person.scale;
+    const width = personW * person.scale;
+    const height = personH * person.scale;
     const minVisible = SIZE * 0.16;
 
     person.x = clamp(person.x, minVisible - width / 2, SIZE - minVisible + width / 2);
@@ -103,8 +108,8 @@
     ctx.fillRect(0, 0, SIZE, SIZE);
 
     if (personImage) {
-      const width = personImage.naturalWidth * person.scale;
-      const height = personImage.naturalHeight * person.scale;
+      const width = personW * person.scale;
+      const height = personH * person.scale;
       ctx.drawImage(
         personImage,
         person.x - width / 2,
@@ -142,14 +147,14 @@
   function autoFitPerson() {
     if (!personImage) return;
 
-    const scaleByWidth = (SIZE * 0.90) / personImage.naturalWidth;
-    const scaleByHeight = (SIZE * 0.94) / personImage.naturalHeight;
+    const scaleByWidth = (SIZE * 0.90) / personW;
+    const scaleByHeight = (SIZE * 0.94) / personH;
     baseScale = Math.min(scaleByWidth, scaleByHeight);
 
     person.scale = baseScale;
     person.x = SIZE / 2;
 
-    const renderedHeight = personImage.naturalHeight * person.scale;
+    const renderedHeight = personH * person.scale;
     const bottomMargin = 18;
     person.y = SIZE - bottomMargin - renderedHeight / 2;
 
@@ -329,17 +334,428 @@
     }
   }
 
-  async function loadPersonFromBlob(blob) {
-    if (personUrl) URL.revokeObjectURL(personUrl);
-    personUrl = URL.createObjectURL(blob);
+  // ---------------------------------------------------------------------
+  // Task 4 — leitura leve de metadados (dimensões + orientação EXIF), sem
+  // decodificar pixel nenhum. Serve de base para o Task 5 calcular o
+  // resize correto ANTES de chamar createImageBitmap.
+  // ---------------------------------------------------------------------
 
+  const JPEG_HEADER_PROBE_BYTES = 1_048_576; // 1 MB cobre EXIF+thumbnail+ICC de qualquer foto real
+
+  function readAscii(view, offset, length) {
+    let out = "";
+    for (let i = 0; i < length; i += 1) out += String.fromCharCode(view.getUint8(offset + i));
+    return out;
+  }
+
+  function readUint24LE(view, offset) {
+    return view.getUint8(offset) | (view.getUint8(offset + 1) << 8) | (view.getUint8(offset + 2) << 16);
+  }
+
+  function isPngSignature(view) {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    for (let i = 0; i < 8; i += 1) {
+      if (view.getUint8(i) !== sig[i]) return false;
+    }
+    return true;
+  }
+
+  // Lê a tag Orientation (0x0112) de um bloco TIFF/EXIF que começa em
+  // `tiffStart` dentro de `view`. Devolve null sempre que o EXIF não puder
+  // ser lido com confiança (nunca lança) — orientação ausente/ilegível vira
+  // orientation=1 e orientationTagOffset=null no chamador.
+  function parseExifOrientation(view, tiffStart) {
+    if (tiffStart + 8 > view.byteLength) return null;
+
+    const b0 = view.getUint8(tiffStart);
+    const b1 = view.getUint8(tiffStart + 1);
+    let littleEndian;
+    if (b0 === 0x49 && b1 === 0x49) littleEndian = true;
+    else if (b0 === 0x4d && b1 === 0x4d) littleEndian = false;
+    else return null;
+
+    if (view.getUint16(tiffStart + 2, littleEndian) !== 42) return null;
+
+    const ifd0Offset = view.getUint32(tiffStart + 4, littleEndian);
+    const ifdStart = tiffStart + ifd0Offset;
+    if (ifdStart + 2 > view.byteLength) return null;
+
+    const entryCount = view.getUint16(ifdStart, littleEndian);
+    const entriesEnd = ifdStart + 2 + entryCount * 12;
+    if (entriesEnd > view.byteLength) return null;
+
+    for (let i = 0; i < entryCount; i += 1) {
+      const entryOffset = ifdStart + 2 + i * 12;
+      const tag = view.getUint16(entryOffset, littleEndian);
+      if (tag !== 0x0112) continue;
+
+      const type = view.getUint16(entryOffset + 2, littleEndian);
+      if (type !== 3) return null; // Orientation deveria ser SHORT; formato inesperado = ilegível
+
+      // Numa IFD entry o valor começa em entryOffset + 8 (2 bytes de tag,
+      // 2 de tipo, 4 de contagem) — é aí que a neutralização escreve depois.
+      const valueOffset = entryOffset + 8;
+      const value = view.getUint16(valueOffset, littleEndian);
+      if (value < 1 || value > 8) return null;
+
+      return { orientation: value, orientationTagOffset: valueOffset, littleEndian };
+    }
+
+    return null; // tag Orientation ausente
+  }
+
+  // Escaneia os marcadores JPEG a partir de `buf` (pode ser só um prefixo do
+  // arquivo). `reachedEnd` indica se o scan chegou a SOS/EOI dentro do
+  // buffer disponível — usado pelo chamador para decidir se vale reler o
+  // arquivo inteiro em busca de SOF/EXIF que ficaram fora do prefixo.
+  function parseJpegBuffer(buf) {
+    const view = new DataView(buf);
+    if (view.byteLength < 4 || view.getUint16(0) !== 0xffd8) return null;
+
+    let offset = 2;
+    let rawWidth = null;
+    let rawHeight = null;
+    let orientation = 1;
+    let orientationTagOffset = null;
+    let littleEndian = true;
+    let reachedEnd = false;
+
+    while (offset + 2 <= view.byteLength) {
+      if (view.getUint8(offset) !== 0xff) break;
+
+      let marker = view.getUint8(offset + 1);
+      offset += 2;
+      while (marker === 0xff && offset < view.byteLength) {
+        marker = view.getUint8(offset);
+        offset += 1;
+      }
+
+      if (marker === 0xd9) { reachedEnd = true; break; } // EOI
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue; // TEM/RSTn: sem payload
+
+      if (offset + 2 > view.byteLength) break;
+      const segLength = view.getUint16(offset);
+      const segDataStart = offset + 2;
+      const segDataLength = Math.max(0, segLength - 2);
+      const availableEnd = Math.min(view.byteLength, segDataStart + segDataLength);
+
+      const isSOF =
+        marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+
+      if (isSOF && segDataStart + 5 <= availableEnd) {
+        rawHeight = view.getUint16(segDataStart + 1);
+        rawWidth = view.getUint16(segDataStart + 3);
+      }
+
+      if (marker === 0xe1 && segDataStart + 6 <= availableEnd) {
+        const isExif =
+          view.getUint8(segDataStart) === 0x45 &&
+          view.getUint8(segDataStart + 1) === 0x78 &&
+          view.getUint8(segDataStart + 2) === 0x69 &&
+          view.getUint8(segDataStart + 3) === 0x66 &&
+          view.getUint8(segDataStart + 4) === 0x00 &&
+          view.getUint8(segDataStart + 5) === 0x00;
+
+        if (isExif) {
+          const exifResult = parseExifOrientation(view, segDataStart + 6);
+          if (exifResult) {
+            orientation = exifResult.orientation;
+            orientationTagOffset = exifResult.orientationTagOffset;
+            littleEndian = exifResult.littleEndian;
+          }
+        }
+      }
+
+      if (marker === 0xda) { reachedEnd = true; break; } // SOS: começam os dados comprimidos
+
+      if (segDataStart + segDataLength > view.byteLength) break; // não dá pra saber onde o próximo marcador começa
+
+      offset = segDataStart + segDataLength;
+    }
+
+    return { rawWidth, rawHeight, orientation, orientationTagOffset, littleEndian, reachedEnd };
+  }
+
+  async function readJpegMeta(file) {
+    const probeSize = Math.min(file.size, JPEG_HEADER_PROBE_BYTES);
+    let result = parseJpegBuffer(await file.slice(0, probeSize).arrayBuffer());
+
+    const needsFullFile =
+      probeSize < file.size &&
+      (!result || result.rawWidth == null || (!result.reachedEnd && result.orientationTagOffset == null));
+
+    if (needsFullFile) {
+      result = parseJpegBuffer(await file.arrayBuffer());
+    }
+
+    if (!result || result.rawWidth == null || result.rawHeight == null) return null;
+
+    return {
+      rawWidth: result.rawWidth,
+      rawHeight: result.rawHeight,
+      orientation: result.orientation,
+      orientationTagOffset: result.orientationTagOffset,
+      littleEndian: result.littleEndian,
+    };
+  }
+
+  function parsePngMeta(buf) {
+    const view = new DataView(buf);
+    if (view.byteLength < 24 || !isPngSignature(view)) return null;
+
+    // O primeiro chunk de um PNG válido é sempre IHDR, logo após a assinatura.
+    const chunkType = readAscii(view, 12, 4);
+    if (chunkType !== "IHDR") return null;
+
+    const rawWidth = view.getUint32(16, false);
+    const rawHeight = view.getUint32(20, false);
+    if (!rawWidth || !rawHeight) return null;
+
+    return { rawWidth, rawHeight, orientation: 1, orientationTagOffset: null, littleEndian: true };
+  }
+
+  function parseWebpMeta(buf) {
+    const view = new DataView(buf);
+    if (view.byteLength < 20) return null;
+    if (readAscii(view, 0, 4) !== "RIFF" || readAscii(view, 8, 4) !== "WEBP") return null;
+
+    const fourCC = readAscii(view, 12, 4);
+    const dataStart = 20;
+    let rawWidth = null;
+    let rawHeight = null;
+
+    if (fourCC === "VP8X" && dataStart + 10 <= view.byteLength) {
+      rawWidth = readUint24LE(view, dataStart + 4) + 1;
+      rawHeight = readUint24LE(view, dataStart + 7) + 1;
+    } else if (fourCC === "VP8 " && dataStart + 10 <= view.byteLength) {
+      rawWidth = view.getUint16(dataStart + 6, true) & 0x3fff;
+      rawHeight = view.getUint16(dataStart + 8, true) & 0x3fff;
+    } else if (fourCC === "VP8L" && dataStart + 5 <= view.byteLength && view.getUint8(dataStart) === 0x2f) {
+      const bits = view.getUint32(dataStart + 1, true);
+      rawWidth = (bits & 0x3fff) + 1;
+      rawHeight = ((bits >>> 14) & 0x3fff) + 1;
+    } else {
+      return null;
+    }
+
+    if (!rawWidth || !rawHeight) return null;
+    return { rawWidth, rawHeight, orientation: 1, orientationTagOffset: null, littleEndian: true };
+  }
+
+  function finalizeMeta(partial) {
+    const swapsAxes = [5, 6, 7, 8].includes(partial.orientation);
+    return {
+      rawWidth: partial.rawWidth,
+      rawHeight: partial.rawHeight,
+      orientation: partial.orientation,
+      orientedWidth: swapsAxes ? partial.rawHeight : partial.rawWidth,
+      orientedHeight: swapsAxes ? partial.rawWidth : partial.rawHeight,
+      orientationTagOffset: partial.orientationTagOffset,
+      littleEndian: partial.littleEndian,
+    };
+  }
+
+  // Contrato (Task 4): { rawWidth, rawHeight, orientation, orientedWidth,
+  // orientedHeight, orientationTagOffset, littleEndian }, ou null se o
+  // formato não for reconhecido (o fallback decide o que fazer nesse caso).
+  // Nunca lança por causa de metadata malformada.
+  async function readImageMeta(file) {
+    const headBuf = await file.slice(0, 32).arrayBuffer();
+    const headView = new DataView(headBuf);
+
+    if (
+      headView.byteLength >= 3 &&
+      headView.getUint8(0) === 0xff &&
+      headView.getUint8(1) === 0xd8 &&
+      headView.getUint8(2) === 0xff
+    ) {
+      const jpegMeta = await readJpegMeta(file);
+      return jpegMeta ? finalizeMeta(jpegMeta) : null;
+    }
+
+    if (headView.byteLength >= 8 && isPngSignature(headView)) {
+      const pngMeta = parsePngMeta(await file.slice(0, 24).arrayBuffer());
+      return pngMeta ? finalizeMeta(pngMeta) : null;
+    }
+
+    if (
+      headView.byteLength >= 12 &&
+      readAscii(headView, 0, 4) === "RIFF" &&
+      readAscii(headView, 8, 4) === "WEBP"
+    ) {
+      const webpMeta = parseWebpMeta(await file.slice(0, 30).arrayBuffer());
+      return webpMeta ? finalizeMeta(webpMeta) : null;
+    }
+
+    return null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Task 5 — imagem de trabalho otimizada.
+  //
+  // Pipeline (decisão de design da migração — NÃO usar imageOrientation
+  // do createImageBitmap, em nenhum valor):
+  //   1. Task 4 lê dimensões + orientação sem decodificar pixel nenhum.
+  //   2. Neutraliza a tag Orientation do JPEG para 1 direto nos bytes do
+  //      header (sem tocar em pixel). A spec renomeou "none" para
+  //      "from-image" e pode reintroduzir "none" com outro sentido no
+  //      futuro — não é seguro depender de nenhum dos dois valores. E sem
+  //      saber se o navegador vai girar a imagem não dá pra calcular
+  //      resizeWidth/resizeHeight certo: errar o eixo distorce a foto, não
+  //      só deixa girada.
+  //   3. createImageBitmap decodifica já neutralizado: sai SEM rotação
+  //      alguma, deterministicamente, em qualquer navegador.
+  //   4. Um canvas intermediário aplica a rotação/espelhamento manualmente
+  //      (switch 1..8) com base na orientação que o Task 4 leu — foto de
+  //      retrato de iPhone é gravada deitada com Orientation=6, é o caso
+  //      comum, não a exceção.
+  // ---------------------------------------------------------------------
+
+  const FALLBACK_TOO_LARGE_MESSAGE =
+    "Não foi possível processar esta foto neste aparelho. Tente usar uma foto menor ou uma captura de tela da foto.";
+
+  function fitInside(width, height, maxSide) {
+    const ratio = Math.min(1, maxSide / Math.max(width, height));
+    return {
+      width: Math.max(1, Math.round(width * ratio)),
+      height: Math.max(1, Math.round(height * ratio)),
+    };
+  }
+
+  // Substitui só os 2 bytes do VALOR da tag Orientation por 1, direto nos
+  // bytes do arquivo — file.slice() é lazy, não materializa pixel nenhum.
+  function neutralizeJpegOrientation(file, meta) {
+    if (meta.orientation === 1 || meta.orientationTagOffset == null) {
+      return file; // nada a fazer
+    }
+    const valor = new ArrayBuffer(2);
+    new DataView(valor).setUint16(0, 1, meta.littleEndian);
+    return new Blob(
+      [
+        file.slice(0, meta.orientationTagOffset),
+        valor,
+        file.slice(meta.orientationTagOffset + 2),
+      ],
+      { type: file.type }
+    );
+  }
+
+  // Aplica manualmente a rotação/espelhamento EXIF (1..8) num canvas
+  // intermediário. `bitmap` é o resultado CRU do createImageBitmap
+  // (dimensões pré-rotação, eixos trocados quando orientation é 5..8);
+  // outW/outH são as dimensões já orientadas de destino.
+  function applyOrientation(bitmap, orientation, outW, outH) {
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx2d = canvas.getContext("2d");
+    const w = bitmap.width;
+    const h = bitmap.height;
+
+    switch (orientation) {
+      case 2: ctx2d.transform(-1, 0, 0, 1, w, 0); break;   // espelho horizontal
+      case 3: ctx2d.transform(-1, 0, 0, -1, w, h); break;  // 180°
+      case 4: ctx2d.transform(1, 0, 0, -1, 0, h); break;   // espelho vertical
+      case 5: ctx2d.transform(0, 1, 1, 0, 0, 0); break;    // transpose
+      case 6: ctx2d.transform(0, 1, -1, 0, h, 0); break;   // 90° horário
+      case 7: ctx2d.transform(0, -1, -1, 0, h, w); break;  // transverse
+      case 8: ctx2d.transform(0, -1, 1, 0, 0, w); break;   // 90° anti-horário
+      default: break;                                      // 1: identidade
+    }
+    ctx2d.drawImage(bitmap, 0, 0);
+    return canvas;
+  }
+
+  async function loadPersonViaImageBitmap(file, meta) {
+    let bitmap = null;
+    try {
+      const target = fitInside(meta.orientedWidth, meta.orientedHeight, MAX_WORK_SIDE);
+      const swapsAxes = [5, 6, 7, 8].includes(meta.orientation);
+      const decodeWidth = swapsAxes ? target.height : target.width;
+      const decodeHeight = swapsAxes ? target.width : target.height;
+
+      const source = neutralizeJpegOrientation(file, meta);
+      bitmap = await createImageBitmap(source, {
+        resizeWidth: decodeWidth,
+        resizeHeight: decodeHeight,
+        resizeQuality: "high",
+      });
+
+      const outCanvas = applyOrientation(bitmap, meta.orientation, target.width, target.height);
+      return { image: outCanvas, width: target.width, height: target.height };
+    } catch (error) {
+      return null; // deixa o chamador cair no fallback <img>
+    } finally {
+      bitmap?.close?.();
+    }
+  }
+
+  // Fallback para navegadores sem createImageBitmap/resize: <img> + decode()
+  // (aplica EXIF sozinho via image-orientation:from-image nativo do
+  // elemento — é o comportamento atual em produção, preservado aqui).
+  async function loadPersonViaImg(file, meta) {
+    if (meta) {
+      const pixels = meta.orientedWidth * meta.orientedHeight;
+      const maxSide = Math.max(meta.orientedWidth, meta.orientedHeight);
+      if (pixels > MAX_FALLBACK_PIXELS || maxSide > MAX_FALLBACK_SIDE) {
+        throw new Error(FALLBACK_TOO_LARGE_MESSAGE);
+      }
+    }
+
+    const url = URL.createObjectURL(file);
     const image = new Image();
     image.decoding = "async";
-    image.src = personUrl;
+    image.src = url;
 
-    await image.decode();
-    personImage = image;
-    processedBlob = blob;
+    try {
+      await image.decode();
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+
+    // Sem meta prévia (formato que o parser leve não reconhece): valida
+    // depois de decodificado, com as dimensões reais.
+    if (!meta) {
+      const pixels = image.naturalWidth * image.naturalHeight;
+      const maxSide = Math.max(image.naturalWidth, image.naturalHeight);
+      if (pixels > MAX_FALLBACK_PIXELS || maxSide > MAX_FALLBACK_SIDE) {
+        URL.revokeObjectURL(url);
+        throw new Error(FALLBACK_TOO_LARGE_MESSAGE);
+      }
+    }
+
+    personUrl = url;
+    return { image, width: image.naturalWidth, height: image.naturalHeight };
+  }
+
+  function releasePersonImage() {
+    personImage?.close?.();
+    if (personUrl) {
+      URL.revokeObjectURL(personUrl);
+      personUrl = null;
+    }
+    personImage = null;
+    personW = 0;
+    personH = 0;
+  }
+
+  async function loadPersonFromBlob(file) {
+    const meta = await readImageMeta(file).catch(() => null);
+
+    let loaded = null;
+    if (meta && typeof createImageBitmap === "function") {
+      loaded = await loadPersonViaImageBitmap(file, meta);
+    }
+    if (!loaded) {
+      loaded = await loadPersonViaImg(file, meta);
+    }
+
+    releasePersonImage();
+    personImage = loaded.image;
+    personW = loaded.width;
+    personH = loaded.height;
+    processedBlob = file;
 
     emptyState.hidden = true;
     adjustments.hidden = false;
@@ -368,7 +784,11 @@
       await loadPersonFromBlob(file);
       showToast("Foto carregada. Agora ajuste a posição.", "success");
     } catch (error) {
-      showToast("Não foi possível ler essa imagem.", "error");
+      const message =
+        error?.message === FALLBACK_TOO_LARGE_MESSAGE
+          ? FALLBACK_TOO_LARGE_MESSAGE
+          : "Não foi possível ler essa imagem.";
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
@@ -415,8 +835,8 @@
       // Mesmos valores usados em draw(): o tamanho final em pixels do canvas.
       // Enviar o tamanho absoluto — e não person.scale — evita que o servidor
       // aplique a escala sobre dimensões diferentes das da prévia.
-      formData.append("w", String(personImage.naturalWidth * person.scale));
-      formData.append("h", String(personImage.naturalHeight * person.scale));
+      formData.append("w", String(personW * person.scale));
+      formData.append("h", String(personH * person.scale));
       formData.append("mask", selectedMask);
 
       const response = await fetch("/api/render", {
