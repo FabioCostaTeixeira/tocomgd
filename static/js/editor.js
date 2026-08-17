@@ -5,6 +5,12 @@
   const MAX_WORK_SIDE = 2800;
   const MAX_FALLBACK_PIXELS = 16_000_000;
   const MAX_FALLBACK_SIDE = 4096;
+  const ALLOWED_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ]);
+  const MAX_FILE_BYTES = 15 * 1024 * 1024;
   const canvas = document.getElementById("artCanvas");
   const canvasWrap = document.getElementById("canvasWrap");
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -20,7 +26,11 @@
   const zoomDec = document.getElementById("zoomDec");
   const zoomInc = document.getElementById("zoomInc");
   const resetButton = document.getElementById("resetButton");
+  const rotateButton = document.getElementById("rotateButton");
   const downloadButton = document.getElementById("downloadButton");
+  const resultCard = document.getElementById("resultCard");
+  const resultImage = document.getElementById("resultImage");
+  const resultHint = document.getElementById("resultHint");
   const toast = document.getElementById("toast");
   const toastIcon = document.getElementById("toastIcon");
   const toastMessage = document.getElementById("toastMessage");
@@ -46,11 +56,11 @@
   let personImage = null;
   let personW = 0;
   let personH = 0;
-  let processedBlob = null;
   let personUrl = null;
+  let resultUrl = null;
   let isBusy = false;
   let baseScale = 1;
-  let person = { x: SIZE / 2, y: SIZE / 2, scale: 1 };
+  let person = { x: SIZE / 2, y: SIZE / 2, scale: 1, rotation: 0 };
   let toastTimer = null;
 
   const pointers = new Map();
@@ -61,10 +71,22 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  // Caixa delimitadora da imagem já rotacionada — imagem girada ocupa uma
+  // área maior que w×h puro, e clampPerson() precisa dessa área maior para
+  // não deixar a pessoa escapar do canvas perto de 45°.
+  function bboxGirado(w, h, rotation) {
+    const c = Math.abs(Math.cos(rotation));
+    const s = Math.abs(Math.sin(rotation));
+    return { w: w * c + h * s, h: w * s + h * c };
+  }
+
   function clampPerson() {
     if (!personImage) return;
-    const width = personW * person.scale;
-    const height = personH * person.scale;
+    const { w: width, h: height } = bboxGirado(
+      personW * person.scale,
+      personH * person.scale,
+      person.rotation
+    );
     const minVisible = SIZE * 0.16;
 
     person.x = clamp(person.x, minVisible - width / 2, SIZE - minVisible + width / 2);
@@ -80,6 +102,28 @@
     toastTimer = window.setTimeout(() => {
       toast.hidden = true;
     }, 3200);
+  }
+
+  function invalidateResult() {
+    if (resultUrl) {
+      URL.revokeObjectURL(resultUrl);
+      resultUrl = null;
+    }
+    if (resultImage) resultImage.removeAttribute("src");
+    if (resultCard) resultCard.hidden = true;
+  }
+
+  function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  function showResult(blob) {
+    invalidateResult();
+    resultUrl = URL.createObjectURL(blob);
+    resultImage.src = resultUrl;
+    resultCard.hidden = false;
+    resultHint.hidden = !isIOS();
   }
 
   function setBusy(busy, title = "Processando…", text = "") {
@@ -110,13 +154,11 @@
     if (personImage) {
       const width = personW * person.scale;
       const height = personH * person.scale;
-      ctx.drawImage(
-        personImage,
-        person.x - width / 2,
-        person.y - height / 2,
-        width,
-        height
-      );
+      ctx.save();
+      ctx.translate(person.x, person.y);
+      ctx.rotate(person.rotation);
+      ctx.drawImage(personImage, -width / 2, -height / 2, width, height);
+      ctx.restore();
     }
 
     const mask = currentMaskImage();
@@ -141,12 +183,16 @@
     person.scale = baseScale * (clamped / 100);
     clampPerson();
     updateZoomUI();
+    invalidateResult();
     draw();
   }
 
   function autoFitPerson() {
     if (!personImage) return;
 
+    // person.rotation NÃO é tocado aqui de propósito: "Centralizar" reposiciona
+    // e reenquadra, mas a rotação foi escolha deliberada do usuário e não deve
+    // ser desfeita por esse botão.
     const scaleByWidth = (SIZE * 0.90) / personW;
     const scaleByHeight = (SIZE * 0.94) / personH;
     baseScale = Math.min(scaleByWidth, scaleByHeight);
@@ -154,11 +200,17 @@
     person.scale = baseScale;
     person.x = SIZE / 2;
 
-    const renderedHeight = personH * person.scale;
+    const renderedHeight = bboxGirado(
+      personW * person.scale,
+      personH * person.scale,
+      person.rotation
+    ).h;
     const bottomMargin = 18;
     person.y = SIZE - bottomMargin - renderedHeight / 2;
 
+    clampPerson();
     updateZoomUI();
+    invalidateResult();
     draw();
   }
 
@@ -176,6 +228,40 @@
 
   function midpoint(a, b) {
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  function angleBetween(a, b) {
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  }
+
+  // Normaliza uma diferença de ângulo para (-π, π], evitando saltos de 360°
+  // quando o gesto atravessa a descontinuidade de atan2 em ±180°.
+  function normalizeAngleDelta(delta) {
+    let d = delta % (2 * Math.PI);
+    if (d > Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    return d;
+  }
+
+  const ROTATION_DEAD_ZONE = (8 * Math.PI) / 180; // só engata rotação após 8°
+  const ROTATION_SNAP = (5 * Math.PI) / 180; // encaixa em 0/90/180/270 dentro de 5°
+  const QUARTER_TURN = Math.PI / 2;
+
+  // Ao soltar os dedos, se a rotação acumulada estiver perto o bastante de um
+  // múltiplo de 90°, encaixa nele — evita deixar a foto "quase reta".
+  function snapRotationIfClose() {
+    const nearest = Math.round(person.rotation / QUARTER_TURN) * QUARTER_TURN;
+    if (Math.abs(person.rotation - nearest) <= ROTATION_SNAP) {
+      person.rotation = nearest;
+    }
+  }
+
+  function rotatePersonBy90() {
+    if (!personImage || isBusy) return;
+    person.rotation += QUARTER_TURN;
+    clampPerson();
+    invalidateResult();
+    draw();
   }
 
   function setDragging(active) {
@@ -203,6 +289,9 @@
         startScale: person.scale,
         startX: person.x,
         startY: person.y,
+        startAngle: angleBetween(a, b),
+        startRotation: person.rotation,
+        rotationEngaged: false,
       };
       setDragging(true);
     } else {
@@ -230,6 +319,7 @@
       person.x = dragState.startX + values[0].x - dragState.startPointer.x;
       person.y = dragState.startY + values[0].y - dragState.startPointer.y;
       clampPerson();
+      invalidateResult();
       draw();
       return;
     }
@@ -242,11 +332,23 @@
       const minScale = baseScale * 0.5;
       const maxScale = baseScale * 2.5;
 
+      // Zona morta: só passa a acompanhar o ângulo do gesto depois que o giro
+      // acumulado ultrapassa ROTATION_DEAD_ZONE — sem isso, quem só quer dar
+      // zoom termina com a foto alguns graus torta sem perceber.
+      const angleDelta = normalizeAngleDelta(angleBetween(a, b) - pinchState.startAngle);
+      if (!pinchState.rotationEngaged && Math.abs(angleDelta) > ROTATION_DEAD_ZONE) {
+        pinchState.rotationEngaged = true;
+      }
+      if (pinchState.rotationEngaged) {
+        person.rotation = pinchState.startRotation + angleDelta;
+      }
+
       person.scale = clamp(pinchState.startScale * ratio, minScale, maxScale);
       person.x = pinchState.startX + currentMidpoint.x - pinchState.startMidpoint.x;
       person.y = pinchState.startY + currentMidpoint.y - pinchState.startMidpoint.y;
       clampPerson();
       updateZoomUI();
+      invalidateResult();
       draw();
     }
   });
@@ -254,6 +356,12 @@
   function finishPointer(event) {
     if (!pointers.has(event.pointerId)) return;
     pointers.delete(event.pointerId);
+    if (pinchState?.rotationEngaged && pointers.size < 2) {
+      snapRotationIfClose();
+      clampPerson();
+      invalidateResult();
+      draw();
+    }
     startGestureState();
   }
 
@@ -270,24 +378,28 @@
         event.preventDefault();
         person.y -= step;
         clampPerson();
+        invalidateResult();
         draw();
         break;
       case "ArrowDown":
         event.preventDefault();
         person.y += step;
         clampPerson();
+        invalidateResult();
         draw();
         break;
       case "ArrowLeft":
         event.preventDefault();
         person.x -= step;
         clampPerson();
+        invalidateResult();
         draw();
         break;
       case "ArrowRight":
         event.preventDefault();
         person.x += step;
         clampPerson();
+        invalidateResult();
         draw();
         break;
       case "+":
@@ -304,6 +416,11 @@
         event.preventDefault();
         autoFitPerson();
         break;
+      case "r":
+      case "R":
+        event.preventDefault();
+        rotatePersonBy90();
+        break;
       default:
         break;
     }
@@ -314,25 +431,18 @@
   zoomInc.addEventListener("click", () => setZoomPercent(Number(zoomRange.value) + 10));
 
   resetButton.addEventListener("click", autoFitPerson);
+  rotateButton.addEventListener("click", rotatePersonBy90);
 
   maskRadios.forEach((radio) => {
     radio.addEventListener("change", () => {
       if (!radio.checked) return;
       selectedMask = radio.value;
       applyMaskAccent();
+      invalidateResult();
       draw();
       showToast(selectedMask === "rosa" ? "Modelo Rosa selecionado." : "Modelo Azul selecionado.");
     });
   });
-
-  async function responseError(response) {
-    try {
-      const data = await response.json();
-      return data.error || "Ocorreu um erro inesperado.";
-    } catch {
-      return "Ocorreu um erro inesperado.";
-    }
-  }
 
   // ---------------------------------------------------------------------
   // Task 4 — leitura leve de metadados (dimensões + orientação EXIF), sem
@@ -755,7 +865,8 @@
     personImage = loaded.image;
     personW = loaded.width;
     personH = loaded.height;
-    processedBlob = file;
+    person.rotation = 0;
+    invalidateResult();
 
     emptyState.hidden = true;
     adjustments.hidden = false;
@@ -767,17 +878,17 @@
   async function processFile(file) {
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
+    if (!ALLOWED_TYPES.has(file.type)) {
       showToast("Selecione uma imagem válida.", "error");
       return;
     }
 
-    const maxBytes = 15 * 1024 * 1024;
-    if (file.size > maxBytes) {
+    if (file.size > MAX_FILE_BYTES) {
       showToast("A foto deve ter no máximo 15 MB.", "error");
       return;
     }
 
+    invalidateResult();
     setBusy(true, "Carregando…");
 
     try {
@@ -823,38 +934,28 @@
   });
 
   downloadButton.addEventListener("click", async () => {
-    if (!processedBlob || !personImage || isBusy) return;
+    if (!personImage || isBusy) return;
 
     setBusy(true, "Gerando a arte…", "Preparando o PNG em 1080×1080.");
 
     try {
-      const formData = new FormData();
-      formData.append("foreground", processedBlob, processedBlob.name || "foto.png");
-      formData.append("x", String(person.x));
-      formData.append("y", String(person.y));
-      // Mesmos valores usados em draw(): o tamanho final em pixels do canvas.
-      // Enviar o tamanho absoluto — e não person.scale — evita que o servidor
-      // aplique a escala sobre dimensões diferentes das da prévia.
-      formData.append("w", String(personW * person.scale));
-      formData.append("h", String(personH * person.scale));
-      formData.append("mask", selectedMask);
-
-      const response = await fetch("/api/render", {
-        method: "POST",
-        body: formData,
+      draw();
+      const resultBlob = await new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Não foi possível gerar a imagem."));
+        }, "image/png");
       });
+      showResult(resultBlob);
 
-      if (!response.ok) throw new Error(await responseError(response));
-
-      const resultBlob = await response.blob();
-      const url = URL.createObjectURL(resultBlob);
       const link = document.createElement("a");
-      link.href = url;
+      link.href = resultUrl;
       link.download = `arte-campanha-${selectedMask}-1080x1080.png`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 3000);
+      if (!isIOS()) {
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
       showToast("Imagem gerada com sucesso.", "success");
     } catch (error) {
       showToast(error.message || "Não foi possível gerar a imagem.", "error");

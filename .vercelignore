@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+tests/
+docs/
+requirements-dev.txt
+.superpowers/

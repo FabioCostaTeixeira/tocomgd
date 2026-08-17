@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0a0d">
-  <title>Gerador de Arte de Campanha</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <title>Monte sua foto com GD!</title>
+  <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body data-mask="rosa">
   <main class="app-shell">
@@ -31,7 +31,7 @@
             checked
           >
           <span class="template-preview">
-            <img src="{{ url_for('static', filename='img/mascara-rosa.png') }}" alt="Prévia do modelo rosa">
+            <img src="/static/img/mascara-rosa-v1.png" alt="Prévia do modelo rosa">
             <span class="check-badge" aria-hidden="true">
               <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </span>
@@ -47,7 +47,7 @@
             value="azul"
           >
           <span class="template-preview">
-            <img src="{{ url_for('static', filename='img/mascara-azul.png') }}" alt="Prévia do modelo azul">
+            <img src="/static/img/mascara-azul-v1.png" alt="Prévia do modelo azul">
             <span class="check-badge" aria-hidden="true">
               <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </span>
@@ -123,6 +123,9 @@
           </div>
 
           <div class="secondary-actions">
+            <button type="button" class="text-button" id="rotateButton">
+              <span>Girar 90°</span>
+            </button>
             <button class="text-button" type="button" id="resetButton">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
               <span>Centralizar</span>
@@ -139,23 +142,28 @@
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v1.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Baixar imagem 1080×1080</span>
       </button>
+
+      <div class="result-card" id="resultCard" hidden>
+        <img id="resultImage" alt="Arte pronta para salvar">
+        <p id="resultHint" hidden>Toque e segure na imagem para salvar em Fotos.</p>
+      </div>
     </div>
 
     <p class="privacy-note">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.5"/></svg>
-      A foto é processada pelo servidor deste projeto e não é salva em disco pelo aplicativo.
+      A foto é processada no seu próprio aparelho e não é enviada para nenhum servidor.
     </p>
 
     <img
       id="maskRosa"
-      src="{{ url_for('static', filename='img/mascara-rosa.png') }}"
+      src="/static/img/mascara-rosa-v1.png"
       alt=""
       hidden
       crossorigin="anonymous"
     >
     <img
       id="maskAzul"
-      src="{{ url_for('static', filename='img/mascara-azul.png') }}"
+      src="/static/img/mascara-azul-v1.png"
       alt=""
       hidden
       crossorigin="anonymous"
@@ -167,6 +175,6 @@
     <span id="toastMessage"></span>
   </div>
 
-  <script src="{{ url_for('static', filename='js/editor.js') }}" defer></script>
+  <script src="/static/js/editor.js" defer></script>
 </body>
 </html>

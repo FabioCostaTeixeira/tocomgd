@@ -98,7 +98,7 @@ def compare_images(path_a: str | Path, path_b: str | Path) -> CompareResult:
 # marcador" de uma das quatro cores de CORNER_COLORS.
 #
 # Medido nas fixtures reais (tests/fixtures/*.jpg cru) e em artes 1080x1080
-# compostas com static/img/mascara-rosa.png e mascara-azul.png (foto
+# compostas com static/img/mascara-rosa-v1.png e mascara-azul-v1.png (foto
 # redimensionada/posicionada como o app faz de verdade, máscara por cima):
 #
 #   - Ruído de compressão JPEG dentro do bloco de um marcador real: a grande
@@ -107,7 +107,7 @@ def compare_images(path_a: str | Path, path_b: str | Path) -> CompareResult:
 #     uma das 8 fixtures exif*.jpg foi ~88.
 #   - A cor de máscara mais próxima de qualquer marcador (nas duas máscaras
 #     do projeto, cruas e redimensionadas para 1080x1080 via LANCZOS como a
-#     app faz) é o rosa/vermelho da mascara-rosa.png, a ~60 de distância do
+#     app faz) é o rosa/vermelho da mascara-rosa-v1.png, a ~60 de distância do
 #     "vermelho" alvo -- todas as outras combinações máscara×cor ficam acima
 #     de ~73. Branco puro (fundo do canvas) fica a ~219 de qualquer marcador.
 #
