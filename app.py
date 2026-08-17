@@ -10,6 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CANVAS_SIZE = 1080
 MAX_UPLOAD_MB = 15
 MAX_SOURCE_SIDE = 3000
+MAX_RENDER_SIDE = 12000
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 DEFAULT_MASK = "rosa"
 MASKS = {
@@ -30,28 +31,6 @@ def normalize_source_image(file_storage) -> Image.Image:
         image.thumbnail((MAX_SOURCE_SIDE, MAX_SOURCE_SIDE), Image.Resampling.LANCZOS)
 
     return image
-
-
-def crop_transparent_edges(image: Image.Image, padding_ratio: float = 0.02) -> Image.Image:
-    """Recorta margens transparentes, mantendo uma pequena folga ao redor da pessoa."""
-    image = image.convert("RGBA")
-    alpha = image.getchannel("A")
-    bbox = alpha.getbbox()
-
-    if not bbox:
-        return image
-
-    left, top, right, bottom = bbox
-    subject_width = max(1, right - left)
-    subject_height = max(1, bottom - top)
-    pad = max(4, round(max(subject_width, subject_height) * padding_ratio))
-
-    left = max(0, left - pad)
-    top = max(0, top - pad)
-    right = min(image.width, right + pad)
-    bottom = min(image.height, bottom + pad)
-
-    return image.crop((left, top, right, bottom))
 
 
 def get_mask_name() -> str:
@@ -113,18 +92,15 @@ def render_art():
     try:
         x = parse_float("x", -CANVAS_SIZE * 2, CANVAS_SIZE * 3)
         y = parse_float("y", -CANVAS_SIZE * 2, CANVAS_SIZE * 3)
-        scale = parse_float("scale", 0.02, 12.0)
+        # Tamanho final em pixels do canvas 1080x1080, medido pelo navegador.
+        # Receber o tamanho absoluto (em vez de um fator de escala relativo às
+        # dimensões da imagem enviada) mantém o download idêntico à prévia,
+        # mesmo quando o servidor redimensiona a origem por limite de memória.
+        target_width = max(1, round(parse_float("w", 1, MAX_RENDER_SIDE)))
+        target_height = max(1, round(parse_float("h", 1, MAX_RENDER_SIDE)))
         mask_name = get_mask_name()
 
         foreground = normalize_source_image(foreground_file)
-        foreground = crop_transparent_edges(foreground)
-
-        target_width = max(1, round(foreground.width * scale))
-        target_height = max(1, round(foreground.height * scale))
-
-        # Evita consumo exagerado de memória em escalas absurdas.
-        if target_width > 12000 or target_height > 12000:
-            return jsonify({"error": "Zoom muito alto para gerar a imagem."}), 400
 
         foreground = foreground.resize(
             (target_width, target_height), Image.Resampling.LANCZOS

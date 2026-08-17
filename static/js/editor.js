@@ -409,10 +409,14 @@
 
     try {
       const formData = new FormData();
-      formData.append("foreground", processedBlob, "pessoa-sem-fundo.png");
+      formData.append("foreground", processedBlob, processedBlob.name || "foto.png");
       formData.append("x", String(person.x));
       formData.append("y", String(person.y));
-      formData.append("scale", String(person.scale));
+      // Mesmos valores usados em draw(): o tamanho final em pixels do canvas.
+      // Enviar o tamanho absoluto — e não person.scale — evita que o servidor
+      // aplique a escala sobre dimensões diferentes das da prévia.
+      formData.append("w", String(personImage.naturalWidth * person.scale));
+      formData.append("h", String(personImage.naturalHeight * person.scale));
       formData.append("mask", selectedMask);
 
       const response = await fetch("/api/render", {
