@@ -1,632 +1,867 @@
-# Migração para Render no Cliente — Plano de Implementação
+# Migração para Render Client-Side — Plano Consolidado
 
-> **Para agentes:** SUB-SKILL OBRIGATÓRIA: use `superpowers:subagent-driven-development` (recomendado) ou `superpowers:executing-plans` para executar tarefa a tarefa. Os passos usam checkbox (`- [ ]`).
+## Objetivo
 
-**Objetivo:** Eliminar o backend Python, passando a gerar o PNG final no próprio navegador, para que o site suporte picos de 2.500 acessos e deixe de esbarrar no limite de 4,5 MB das Vercel Functions.
+Converter o `tocomgd` em site 100% estático:
 
-**Arquitetura:** O `<canvas>` de 1080×1080 já contém exatamente a imagem final. Em vez de reenviar a foto ao servidor para o Pillow recompor tudo, o download passa a sair de `canvas.toBlob()`. O site vira conteúdo estático servido pela CDN da Vercel, sem nenhuma Function.
+```text
+Vercel CDN
+   ↓
+HTML / CSS / JS / máscaras
+   ↓
+navegador do usuário
+   ↓
+foto → edição → canvas 1080×1080 → PNG → download
+```
 
-**Stack:** HTML + CSS + JavaScript puro (sem framework, sem build). Testes automatizados via Chrome DevTools Protocol dirigido por Node. Fixtures de imagem geradas com Pillow em um virtualenv local (dependência apenas de desenvolvimento, fora do deploy).
+Eliminar:
 
-## Restrições Globais
+* Flask;
+* Pillow em produção;
+* Vercel Functions;
+* `/api/render`;
+* upload da foto;
+* limite de payload de Function;
+* divergência entre preview e download.
 
-- **Nada de backend em produção.** Ao final não pode restar `app.py`, `requirements.txt`, `Dockerfile`, `Procfile` nem qualquer rota `/api/*`.
-- **Decodificação da foto pelo elemento `<img>`**, nunca por `createImageBitmap`. Motivo: o `<img>` aplica a orientação EXIF via default do CSS `image-orientation: from-image`, com suporte mais amplo (`createImageBitmap` com `imageOrientation:'from-image'` cobre só 92,84% e falha em Samsung Internet <23, UC Browser e QQ Browser).
-- **Cap de lado da imagem de trabalho: 2560 px.** Saída é 1080; o auto-fit encaixa em 972 px e o zoom máximo é 250%, logo 972 × 2,5 = 2430 px é o máximo que chega a aparecer. 2560 dá margem sem desperdiçar memória.
-- **Limite de upload permanece 15 MB**, validado no cliente antes de decodificar.
-- **Máscaras seguem same-origin** em `/static/img/`. Movê-las para outro domínio contamina o canvas e faz `toBlob()` lançar `SecurityError`.
-- **Formatos aceitos:** `image/jpeg`, `image/png`, `image/webp`.
-- **Saída:** PNG 1080×1080, nome `arte-campanha-<mascara>-1080x1080.png`.
-- **Textos em português do Brasil**, mantendo o tom já usado na interface.
-- **Branch de trabalho:** `dev`. Merge em `master` só após teste em dispositivo real. Rollback = commit `8886dd1`.
-
----
-
-## Estrutura de Arquivos
-
-| Arquivo | Responsabilidade | Ação |
-|---|---|---|
-| `index.html` | Página única, sem Jinja, na raiz (Vercel serve a raiz como estático) | Criar (a partir de `templates/index.html`) |
-| `static/js/editor.js` | Todo o editor: carregar, enquadrar, exportar | Modificar |
-| `static/css/style.css` | Estilos; ganha o bloco do resultado para salvar no iOS | Modificar |
-| `vercel.json` | Config estática + cache das máscaras | Reescrever |
-| `.vercelignore` | Mantém `docs/`, `tests/` e o venv fora do deploy | Criar |
-| `requirements-dev.txt` | Pillow, só para gerar fixtures e comparar imagens nos testes | Criar |
-| `tests/harness.js` | Runner CDP reaproveitável (abre Chrome, sobe foto, captura canvas e download) | Criar |
-| `tests/fixtures.py` | Gera as fotos-problema do plano do cliente | Criar |
-| `tests/run.js` | Executa a matriz de testes e emite veredito | Criar |
-| `app.py` | — | **Apagar** |
-| `requirements.txt` | — | **Apagar** |
-| `Dockerfile` | — | **Apagar** |
-| `Procfile` | — | **Apagar** |
-| `templates/index.html` | — | **Apagar** (vira `index.html`) |
+O **mesmo canvas exibido ao usuário deve ser a fonte do arquivo exportado**.
 
 ---
 
-### Task 1: Infra de testes no navegador
+# Regras globais
 
-Sem isto as tarefas seguintes não têm como ser verificadas. O runner é o mesmo mecanismo já usado para provar a correção do WYSIWYG.
+## Arquitetura
 
-**Files:**
-- Create: `tests/harness.js`
-- Create: `tests/fixtures.py`
-- Create: `requirements-dev.txt`
+* [ ] Nenhum backend em produção.
+* [ ] Nenhuma rota `/api/*`.
+* [ ] Foto nunca sai do aparelho.
+* [ ] Preview e exportação usam o mesmo `<canvas>`.
+* [ ] Saída: PNG 1080×1080.
+* [ ] Nome: `arte-campanha-<mascara>-1080x1080.png`.
+* [ ] Formatos aceitos: JPEG, PNG e WEBP.
+* [ ] Limite de arquivo: 15 MB antes de qualquer processamento.
+* [ ] Não recortar margens transparentes automaticamente.
+* [ ] Máscaras permanecem same-origin.
 
-**Interfaces:**
-- Produz: `runCase({ url, photoPath, viewport })` → `Promise<{ previewPng: Buffer, downloadPng: Buffer }>`, usada pelas Tasks 2, 3 e 5.
+## Imagem de trabalho
 
-- [ ] **Step 1: Declarar a dependência de desenvolvimento**
+Usar:
+
+```js
+const MAX_WORK_SIDE = 2800;
+```
+
+Justificativa:
+
+```text
+1080 × 0,94 × 2,5 ≈ 2538 px
+```
+
+2800 mantém margem sem carregar desnecessariamente imagens de 12–48 MP durante a edição.
+
+### Pipeline preferencial
+
+```text
+arquivo
+→ validar MIME/tamanho
+→ ler dimensões + orientação sem decodificar pixels
+→ neutralizar a tag Orientation para 1 (sem tocar nos pixels)
+→ calcular dimensões <= 2800
+→ createImageBitmap com resize
+→ canvas intermediário aplica a orientação lida
+→ imagem de trabalho, fisicamente correta
+→ canvas do editor
+```
+
+Preferir:
+
+```js
+createImageBitmap(arquivoNeutralizado, {
+  resizeWidth,
+  resizeHeight,
+  resizeQuality: "high",
+});
+```
+
+`resizeWidth` e `resizeHeight` devem preservar proporção.
+
+**Nunca passar `imageOrientation`.** O valor `"none"` foi removido da especificação — o
+HTML Standard registra que ele "foi renomeado para `from-image`" e que "no futuro, `none`
+será readicionado com um significado diferente". Usá-lo hoje é um erro que muda de
+comportamento sozinho amanhã. E `"from-image"` também não serve como fluxo principal:
+o suporte é de 92,84% (Safari 16+, Chrome 112+), enquanto o resize existe desde
+Safari 15 e Chrome 54. Na faixa entre os dois — Safari 15, Chrome 54–111 — o resize
+funciona, o app não cai no fallback, e o EXIF é ignorado em silêncio.
+
+O motivo de neutralizar não é a rotação em si, e sim o **resize**: sem saber se o
+navegador vai girar a imagem, não há como calcular `resizeWidth`/`resizeHeight`. Errar o
+eixo não deixa a foto girada, deixa **distorcida**. Com a tag zerada, a saída do decode é
+sempre igual às dimensões cruas, em qualquer navegador.
+
+Não usar como fluxo principal:
+
+```js
+img.src = blobUrl;
+await img.decode();
+```
+
+para fotos gigantes, pois a imagem original pode ser materializada em memória antes da redução.
+
+### A orientação continua sendo aplicada automaticamente
+
+Neutralizar a tag **não** significa entregar a foto deitada ao usuário. Depois do resize, a
+orientação lida na Task 4 é aplicada por nós em um canvas intermediário.
+
+Motivo: foto de retrato de iPhone é gravada deitada com `Orientation = 6`. É o caso
+comum, não a exceção. Entregar essa foto deitada obrigaria praticamente todo usuário de
+iPhone a girar na mão — regressão frente ao comportamento atual em produção, onde o
+`<img>` orienta sozinho. Como a orientação já foi lida, aplicá-la custa um `switch` curto.
+
+A rotação manual (gesto e botão) existe como **correção**, para fotos sem EXIF ou com EXIF
+errado — não como substituto da orientação automática.
+
+### Compatibilidade
+
+Implementar feature detection.
+
+Se `createImageBitmap`/resize seguro não estiver disponível:
+
+* usar `<img>` somente para imagens de tamanho considerado seguro;
+* não decodificar foto gigante integralmente;
+* para arquivos muito grandes, mostrar mensagem amigável pedindo uma foto menor.
+
+Sugestão conservadora para o fallback:
+
+```js
+const MAX_FALLBACK_PIXELS = 16_000_000;
+const MAX_FALLBACK_SIDE = 4096;
+```
+
+Fotos acima disso podem ser recusadas apenas no caminho legado de compatibilidade.
+
+Mensagem:
+
+> Não foi possível processar esta foto neste aparelho. Tente usar uma foto menor ou uma captura de tela da foto.
+
+---
+
+# Regra de eficiência para o agente
+
+**Minimizar custo de tokens e contexto durante toda a execução.**
+
+* Não repetir objetivo, arquitetura ou decisões já aprovadas.
+* Ler somente arquivos/trechos necessários para a tarefa atual.
+* Preferir `diff`/patch a reproduzir arquivos inteiros.
+* Não reexplicar passos triviais.
+* Agrupar comandos e verificações relacionadas.
+* Após cada tarefa, relatar somente:
+
+  * arquivos alterados;
+  * testes executados;
+  * resultado;
+  * erro/bloqueio, se houver.
+* Não repetir resultados já confirmados.
+* Comentários no código apenas quando explicarem uma decisão não óbvia.
+* Não criar abstrações ou dependências sem necessidade.
+* Ao delegar para subagente, fornecer somente o contexto específico daquela tarefa.
+* Se um teste passar, registrar de forma curta e prosseguir.
+* Não ampliar escopo.
+
+---
+
+# Estratégia Git / rollback
+
+Antes de modificar produção:
+
+```bash
+git checkout master
+git pull --ff-only
+git branch legacy-server
+git tag pre-client-render
+git push origin legacy-server
+git push origin pre-client-render
+```
+
+Criar ou atualizar a branch de implementação:
+
+```bash
+git checkout -b dev
+```
+
+Se `dev` já existir, sincronizá-la intencionalmente com `master`.
+
+O backend antigo é:
+
+> **rollback operacional manual**
+
+e não fallback automático.
+
+Proibido criar:
+
+```js
+try {
+  gerarLocalmente();
+} catch {
+  fetch("/api/render");
+}
+```
+
+Uma falha comum de browser poderia jogar muitos usuários simultaneamente na Function antiga.
+
+Também evitar `git push --force` como procedimento normal de rollback.
+
+Se necessário:
+
+1. usar rollback de deployment da Vercel quando disponível; ou
+2. restaurar `pre-client-render`/`legacy-server` por commit/revert normal.
+
+---
+
+# Estrutura final
+
+```text
+/
+├── index.html
+├── vercel.json
+├── .vercelignore
+├── requirements-dev.txt
+│
+├── static/
+│   ├── css/
+│   │   └── style.css
+│   ├── js/
+│   │   └── editor.js
+│   └── img/
+│       ├── mascara-rosa-v1.png
+│       └── mascara-azul-v1.png
+│
+└── tests/
+    ├── harness.js
+    ├── fixtures.py
+    ├── compare.py
+    ├── run.js
+    ├── fixtures/
+    └── saida/
+```
+
+Remover:
+
+```text
+app.py
+requirements.txt
+Dockerfile
+Procfile
+templates/
+```
+
+---
+
+# Task 1 — Preservar legado
+
+* [ ] Criar `legacy-server`.
+* [ ] Criar tag `pre-client-render`.
+* [ ] Fazer push dos dois.
+* [ ] Criar/usar `dev`.
+* [ ] Confirmar working tree limpa.
+
+Critério:
+
+```bash
+git status
+```
+
+deve mostrar nenhuma alteração antes da implementação.
+
+---
+
+# Task 2 — Infraestrutura de testes
+
+Criar:
+
+```text
+requirements-dev.txt
+tests/fixtures.py
+tests/harness.js
+tests/compare.py
+```
+
+## Dependência
 
 `requirements-dev.txt`:
 
-```
+```text
 Pillow>=12,<13
 ```
 
-- [ ] **Step 2: Escrever o gerador de fixtures**
+Pillow existe **somente para testes locais**.
 
-`tests/fixtures.py`:
+---
+
+## Fixtures obrigatórias
+
+Gerar:
+
+```text
+12mp.jpg          4000×3000
+48mp.jpg          8000×6000
+exif1.jpg         normal
+exif2.jpg         espelho horizontal
+exif3.jpg         180°
+exif4.jpg         espelho vertical
+exif5.jpg         transpose
+exif6.jpg         90° horário
+exif7.jpg         transverse
+exif8.jpg         90° anti-horário
+transparente.png
+foto.webp
+pesada.jpg        entre 14 MB e 15 MB
+```
+
+As oito orientações são geradas porque o transform passa a ser nosso: sem fixture para um
+caso, um erro de sinal no espelhamento passa despercebido. São arquivos pequenos.
+
+As fixtures visuais devem possuir marcas geométricas claras, incluindo um marcador no canto superior esquerdo, para detectar orientação incorreta.
+
+### Fixture pesada
+
+Não usar configuração fixa que possa produzir arquivo muito acima de 15 MB.
+
+O gerador deve ajustar qualidade/dimensões iterativamente até obter:
 
 ```python
-"""Gera as fotos-problema usadas na matriz de testes."""
-from pathlib import Path
-
-from PIL import Image, ImageDraw
-
-OUT = Path(__file__).parent / "fixtures"
-OUT.mkdir(exist_ok=True)
-
-
-def _padrao(w: int, h: int) -> Image.Image:
-    """Imagem com marcos geométricos, para medir posição e orientação."""
-    img = Image.new("RGB", (w, h))
-    d = ImageDraw.Draw(img)
-    for i in range(0, h, 4):
-        c = int(255 * i / h)
-        d.rectangle([0, i, w, i + 4], fill=(c, 80, 255 - c))
-    d.ellipse([w * 0.25, h * 0.15, w * 0.75, h * 0.85],
-              fill=(255, 240, 0), outline=(0, 0, 0), width=max(4, w // 100))
-    # Marco no CANTO SUPERIOR ESQUERDO: revela rotação EXIF errada.
-    d.rectangle([w * 0.03, h * 0.03, w * 0.18, h * 0.18], fill=(0, 200, 60))
-    return img
-
-
-def _exif(orientation: int) -> Image.Exif:
-    exif = Image.Exif()
-    exif[0x0112] = orientation  # tag Orientation
-    return exif
-
-
-def main() -> None:
-    _padrao(4000, 3000).save(OUT / "12mp.jpg", quality=88)
-    _padrao(8000, 6000).save(OUT / "48mp.jpg", quality=85)
-
-    retrato = _padrao(3000, 4000)
-    retrato.save(OUT / "exif6.jpg", quality=88, exif=_exif(6))
-    retrato.save(OUT / "exif8.jpg", quality=88, exif=_exif(8))
-
-    transp = _padrao(1200, 1600).convert("RGBA")
-    transp.putalpha(Image.new("L", transp.size, 255))
-    borda = Image.new("RGBA", (1800, 2000), (0, 0, 0, 0))
-    borda.paste(transp, (300, 200), transp)
-    borda.save(OUT / "transparente.png")
-
-    _padrao(2000, 1500).save(OUT / "foto.webp", format="WEBP", quality=85)
-
-    # Arquivo perto do teto de 15 MB: ruído aleatório não comprime, então o
-    # JPEG fica grande de verdade e mede o tempo de decodificação no aparelho.
-    import os
-
-    ruido = Image.frombytes("RGB", (6000, 4500), os.urandom(6000 * 4500 * 3))
-    ruido.paste(_padrao(6000, 4500).crop((0, 0, 3000, 2250)), (0, 0))
-    ruido.save(OUT / "pesada.jpg", quality=97, subsampling=0)
-
-    for f in sorted(OUT.iterdir()):
-        print(f"{f.name:20} {f.stat().st_size / 1024:8.0f} KB")
-
-
-if __name__ == "__main__":
-    main()
+14 * 1024 * 1024 <= tamanho < 15 * 1024 * 1024
 ```
 
-- [ ] **Step 3: Gerar as fixtures e conferir**
+E finalizar com:
 
-```bash
-./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-./.venv/Scripts/python.exe tests/fixtures.py
+```python
+assert 14 * 1024 * 1024 <= tamanho < 15 * 1024 * 1024
 ```
 
-Esperado: sete arquivos listados — `12mp.jpg`, `48mp.jpg`, `exif6.jpg`, `exif8.jpg`, `transparente.png`, `foto.webp`, `pesada.jpg`.
+Falhar se não conseguir produzir a fixture correta.
 
-- [ ] **Step 4: Escrever o runner CDP**
+---
 
-`tests/harness.js`:
+# Task 3 — Harness de navegador
+
+`tests/harness.js` deve automatizar Chrome via CDP e expor:
 
 ```js
-// Runner de testes: abre o Chrome headless, sobe uma foto pela interface real,
-// e devolve os pixels da prévia e os do arquivo baixado.
-const { spawn } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+runCase({
+  url,
+  photoPath,
+  viewport,
+})
+```
 
-const CHROME = process.env.CHROME_PATH
-  || "C:/Program Files/Google/Chrome/Application/chrome.exe";
+Retorno mínimo:
 
-function conectar(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  let id = 1;
-  const pendentes = {};
-  ws.addEventListener("message", (e) => {
-    const m = JSON.parse(e.data);
-    if (m.id && pendentes[m.id]) { pendentes[m.id](m); delete pendentes[m.id]; }
-  });
-  const pronto = new Promise((r) => ws.addEventListener("open", r));
-  const call = (method, params) => new Promise((resolve) => {
-    const meu = id++;
-    ws.send(JSON.stringify({ id: meu, method, params }));
-    pendentes[meu] = resolve;
-  });
-  return { pronto, call, fechar: () => ws.close() };
+```js
+{
+  previewPng: Buffer,
+  downloadPng: Buffer,
+  networkRequests: []
 }
+```
 
-async function abrirChrome(url, porta) {
-  const perfil = fs.mkdtempSync(path.join(os.tmpdir(), "cdp-"));
-  const proc = spawn(CHROME, [
-    "--headless=new", "--disable-gpu", `--remote-debugging-port=${porta}`,
-    `--user-data-dir=${perfil}`, "--no-first-run", url,
-  ], { stdio: "ignore" });
+Fluxo:
 
-  for (let i = 0; i < 40; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      const res = await fetch(`http://127.0.0.1:${porta}/json`);
-      const alvo = (await res.json())
-        .find((t) => t.type === "page" && t.url.startsWith(url.split("?")[0]));
-      if (alvo) return { proc, wsUrl: alvo.webSocketDebuggerUrl };
-    } catch { /* ainda subindo */ }
-  }
-  proc.kill();
-  throw new Error("Chrome não respondeu na porta " + porta);
+```text
+abrir site
+→ selecionar arquivo no #photoInput
+→ esperar editor ficar pronto
+→ capturar canvas
+→ acionar botão de download
+→ capturar Blob exportado
+→ registrar requests de rede
+```
+
+O teste deve conseguir afirmar que nenhum download gerou chamada para:
+
+```text
+/api/*
+```
+
+Timeout máximo por foto grande deve ser explícito.
+
+---
+
+# Task 4 — Leitura leve de metadados
+
+Implementar helper para obter antes da decodificação pesada:
+
+```js
+{
+  rawWidth,            // dimensões como os pixels estão gravados
+  rawHeight,
+  orientation,         // 1..8, ou 1 quando ausente/ilegível
+  orientedWidth,       // dimensões depois de aplicada a orientação
+  orientedHeight,
+  orientationTagOffset, // byte do VALOR da tag, ou null
+  littleEndian
 }
+```
 
-/**
- * Sobe uma foto pela interface e captura prévia + download.
- * @returns {Promise<{previewPng: Buffer, downloadPng: Buffer}>}
- */
-async function runCase({ url, photoPath, viewport = { width: 900, height: 1000 }, porta = 9400 }) {
-  const { proc, wsUrl } = await abrirChrome(url, porta);
-  const cdp = conectar(wsUrl);
-  await cdp.pronto;
+Regra das dimensões orientadas:
 
-  const evalJs = async (expression, awaitPromise = false) => {
-    const r = await cdp.call("Runtime.evaluate", {
-      expression, returnByValue: true, awaitPromise,
-    });
-    if (r.result.exceptionDetails) {
-      throw new Error(JSON.stringify(r.result.exceptionDetails));
-    }
-    return r.result.result.value;
+```js
+const swapsAxes = [5, 6, 7, 8].includes(orientation);
+
+orientedWidth  = swapsAxes ? rawHeight : rawWidth;
+orientedHeight = swapsAxes ? rawWidth  : rawHeight;
+```
+
+Exemplo — JPEG físico 4000×3000 com `Orientation = 6`:
+
+```text
+rawWidth       = 4000
+rawHeight      = 3000
+orientation    = 6
+orientedWidth  = 3000
+orientedHeight = 4000
+```
+
+Suportar:
+
+```text
+JPEG
+PNG
+WEBP
+```
+
+Para JPEG, ler também EXIF Orientation quando presente.
+
+`orientationTagOffset` deve apontar para o **campo de valor** da tag, não para o início dela:
+numa IFD entry o valor começa em `entryOffset + 8` (2 bytes de tag, 2 de tipo, 4 de contagem).
+Escrever nos 2 primeiros bytes desse campo, respeitando `littleEndian`.
+
+Se o arquivo não for JPEG, ou o EXIF não for legível, devolver `orientation = 1` e
+`orientationTagOffset = null`. Nunca lançar exceção por metadata malformada — foto com
+EXIF quebrado deve carregar e ser corrigível pela rotação manual.
+
+Essa etapa deve trabalhar sobre `ArrayBuffer`/headers do arquivo e **não materializar todos os pixels da foto**.
+
+---
+
+# Task 5 — Imagem de trabalho otimizada
+
+Em `static/js/editor.js`:
+
+```js
+const SIZE = 1080;
+const MAX_WORK_SIDE = 2800;
+
+let personImage = null;
+let personW = 0;
+let personH = 0;
+```
+
+Nenhuma parte do editor deve depender diretamente de:
+
+```js
+personImage.naturalWidth
+personImage.naturalHeight
+```
+
+Os cálculos devem usar:
+
+```js
+personW
+personH
+```
+
+Isso permite que `personImage` seja `ImageBitmap`, `<img>` ou outro source válido de `drawImage()`.
+
+---
+
+## Calcular resize
+
+A partir das dimensões já orientadas:
+
+```text
+se maior eixo <= 2800
+    manter dimensões
+senão
+    maior eixo = 2800
+    outro eixo proporcional
+```
+
+Exemplo:
+
+```js
+function fitInside(width, height, maxSide) {
+  const ratio = Math.min(1, maxSide / Math.max(width, height));
+
+  return {
+    width: Math.max(1, Math.round(width * ratio)),
+    height: Math.max(1, Math.round(height * ratio)),
   };
-
-  try {
-    await cdp.call("Emulation.setDeviceMetricsOverride", {
-      ...viewport, deviceScaleFactor: 1, mobile: false,
-    });
-    await cdp.call("DOM.enable", {});
-    const doc = await cdp.call("DOM.getDocument", { depth: -1, pierce: true });
-    const no = await cdp.call("DOM.querySelector", {
-      nodeId: doc.result.root.nodeId, selector: "#photoInput",
-    });
-    await cdp.call("DOM.setFileInputFiles", {
-      files: [photoPath], nodeId: no.result.nodeId,
-    });
-    await evalJs(
-      `document.getElementById('photoInput')`
-      + `.dispatchEvent(new Event('change',{bubbles:true}))`
-    );
-
-    const inicio = Date.now();
-    let pronto = false;
-    while (Date.now() - inicio < 60000) {
-      await new Promise((r) => setTimeout(r, 500));
-      if (await evalJs(`document.getElementById('adjustments').hidden===false`)) {
-        pronto = true;
-        break;
-      }
-    }
-    if (!pronto) throw new Error("foto não carregou em 60s");
-
-    const previa = await evalJs(
-      `document.getElementById('artCanvas').toDataURL('image/png')`
-    );
-
-    const baixado = await evalJs(`(async () => {
-      const btn = document.getElementById('downloadButton');
-      if (btn.disabled) throw new Error('botão de download desabilitado');
-      const orig = URL.createObjectURL;
-      let capturado = null;
-      URL.createObjectURL = function (b) { capturado = b; return orig.call(URL, b); };
-      btn.click();
-      for (let i = 0; i < 200 && !capturado; i++) {
-        await new Promise(r => setTimeout(r, 100));
-      }
-      URL.createObjectURL = orig;
-      if (!capturado) throw new Error('nenhum blob gerado');
-      return await new Promise(res => {
-        const fr = new FileReader();
-        fr.onload = () => res(fr.result);
-        fr.readAsDataURL(capturado);
-      });
-    })()`, true);
-
-    return {
-      previewPng: Buffer.from(previa.split(",")[1], "base64"),
-      downloadPng: Buffer.from(baixado.split(",")[1], "base64"),
-    };
-  } finally {
-    cdp.fechar();
-    proc.kill();
-  }
 }
-
-module.exports = { runCase };
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/harness.js tests/fixtures.py requirements-dev.txt
-git commit -m "test: adiciona runner CDP e gerador de fixtures"
 ```
 
 ---
 
-### Task 2: Reduzir a foto uma única vez ao carregar
+## Caminho principal
 
-Hoje `personImage` é o `<img>` no tamanho original. Cada `pointermove` redesenha a partir dele, o que trava o arrasto em fotos grandes. Passa a existir uma imagem de trabalho limitada a 2560 px.
+Usar `createImageBitmap` quando suportado.
 
-**Files:**
-- Modify: `static/js/editor.js` (bloco de estado e `loadPersonFromBlob`)
-- Test: `tests/run.js` (criado na Task 5; nesta task a verificação é manual pelo runner)
+Garantir:
 
-**Interfaces:**
-- Consome: `runCase()` da Task 1.
-- Produz: variáveis de módulo `personW` e `personH` (números, dimensões da imagem de trabalho) e `personImage` (`HTMLImageElement` **ou** `HTMLCanvasElement`). Todo consumidor deve usar `personW`/`personH`, nunca `naturalWidth`/`naturalHeight`, já que um canvas não possui essas propriedades.
+```text
+resize
++
+orientação EXIF
++
+aspect ratio
+```
 
-- [ ] **Step 1: Declarar o cap e as dimensões de trabalho**
+antes de entregar a imagem ao editor.
 
-Em `static/js/editor.js`, logo após `const SIZE = 1080;`:
+Liberar recursos antigos ao trocar foto:
 
 ```js
-  // Saída é 1080; o auto-fit encaixa em 972px e o zoom vai até 250%,
-  // logo 972 * 2.5 = 2430px é o máximo que chega a aparecer na arte.
-  // Guardar mais que isso só consome memória e trava o arrasto.
-  const MAX_WORK_SIDE = 2560;
+bitmap.close?.();
+URL.revokeObjectURL(...);
 ```
 
-E, junto das demais variáveis de estado (perto de `let personImage = null;`):
+quando aplicável.
 
-```js
-  let personW = 0;
-  let personH = 0;
+---
+
+## Fallback
+
+Se a pipeline otimizada não existir:
+
+```text
+imagem segura
+→ <img>
+→ decode
+→ redução
 ```
 
-- [ ] **Step 2: Trocar todas as leituras de `naturalWidth`/`naturalHeight`**
+Se dimensões/pixels excederem o limite de fallback:
 
-São cinco pontos. Em `clampPerson()`:
-
-```js
-  function clampPerson() {
-    if (!personImage) return;
-    const width = personW * person.scale;
-    const height = personH * person.scale;
-    const minVisible = SIZE * 0.16;
-
-    person.x = clamp(person.x, minVisible - width / 2, SIZE - minVisible + width / 2);
-    person.y = clamp(person.y, minVisible - height / 2, SIZE - minVisible + height / 2);
-  }
-```
-
-Em `draw()`:
-
-```js
-    if (personImage) {
-      const width = personW * person.scale;
-      const height = personH * person.scale;
-      ctx.drawImage(
-        personImage,
-        person.x - width / 2,
-        person.y - height / 2,
-        width,
-        height
-      );
-    }
-```
-
-Em `autoFitPerson()`:
-
-```js
-    const scaleByWidth = (SIZE * 0.90) / personW;
-    const scaleByHeight = (SIZE * 0.94) / personH;
-    baseScale = Math.min(scaleByWidth, scaleByHeight);
-
-    person.scale = baseScale;
-    person.x = SIZE / 2;
-
-    const renderedHeight = personH * person.scale;
-```
-
-- [ ] **Step 3: Reduzir a imagem ao carregar**
-
-Substituir `loadPersonFromBlob` inteira:
-
-```js
-  async function loadPersonFromBlob(blob) {
-    if (personUrl) URL.revokeObjectURL(personUrl);
-    personUrl = URL.createObjectURL(blob);
-
-    // A decodificação passa pelo elemento <img> de propósito: é ele que aplica
-    // a orientação EXIF, pelo padrão do CSS image-orientation: from-image.
-    // createImageBitmap teria a mesma função, mas a opção imageOrientation
-    // não existe em Samsung Internet antigo, UC Browser e QQ Browser.
-    const image = new Image();
-    image.decoding = "async";
-    image.src = personUrl;
-    await image.decode();
-
-    const maior = Math.max(image.naturalWidth, image.naturalHeight);
-
-    if (maior > MAX_WORK_SIDE) {
-      // Reduz uma única vez: o arrasto redesenha a cada quadro e não pode
-      // reamostrar uma foto de 48 MP a cada movimento do dedo.
-      const fator = MAX_WORK_SIDE / maior;
-      const work = document.createElement("canvas");
-      work.width = Math.max(1, Math.round(image.naturalWidth * fator));
-      work.height = Math.max(1, Math.round(image.naturalHeight * fator));
-      work.getContext("2d").drawImage(image, 0, 0, work.width, work.height);
-
-      personImage = work;
-      personW = work.width;
-      personH = work.height;
-
-      // Libera a foto original assim que a versão reduzida existe.
-      URL.revokeObjectURL(personUrl);
-      personUrl = null;
-    } else {
-      personImage = image;
-      personW = image.naturalWidth;
-      personH = image.naturalHeight;
-    }
-
-    emptyState.hidden = true;
-    adjustments.hidden = false;
-    primaryControls.hidden = true;
-    downloadButton.disabled = false;
-    autoFitPerson();
-  }
-```
-
-- [ ] **Step 4: Verificar que nada ficou para trás**
-
-```bash
-grep -n "naturalWidth\|naturalHeight" static/js/editor.js
-```
-
-Esperado: apenas as ocorrências **dentro** de `loadPersonFromBlob` (as que leem `image.naturalWidth`). Qualquer outra é bug — um canvas não tem essa propriedade e o resultado seria `NaN`.
-
-- [ ] **Step 5: Testar com a foto de 48 MP**
-
-Com o servidor Flask ainda de pé (`./.venv/Scripts/python.exe app.py`):
-
-```bash
-node -e "
-const { runCase } = require('./tests/harness');
-runCase({ url:'http://127.0.0.1:5000/', photoPath: require('path').resolve('tests/fixtures/48mp.jpg') })
-  .then(r => { require('fs').writeFileSync('/tmp/t2.png', r.previewPng); console.log('prévia OK', r.previewPng.length, 'bytes'); })
-  .catch(e => { console.error('FALHOU:', e.message); process.exit(1); });
-"
-```
-
-Esperado: `prévia OK` com tamanho não nulo. Se sair `NaN` na tela ou o canvas vier em branco, algum `naturalWidth` escapou do Step 2.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add static/js/editor.js
-git commit -m "perf: reduz a foto uma vez ao carregar, com limite de 2560px"
+```text
+não decodificar
+→ mostrar erro amigável
 ```
 
 ---
 
-### Task 3: Gerar o PNG no navegador
+# Task 6 — Atualizar cálculos do editor
 
-**Files:**
-- Modify: `static/js/editor.js` (handler do botão de download)
-- Modify: `static/css/style.css` (bloco do resultado)
-- Modify: `templates/index.html` (bloco do resultado)
+Usar `personW/personH` em:
 
-**Interfaces:**
-- Consome: `personW`/`personH` da Task 2.
-- Produz: função `exportarArte(): Promise<Blob>` e o elemento `#resultCard`, usados pela Task 5.
+* `clampPerson()`;
+* `draw()`;
+* `autoFitPerson()`;
+* qualquer cálculo de zoom/tamanho.
 
-- [ ] **Step 1: Adicionar o bloco de resultado ao HTML**
+Exemplo:
 
-Em `templates/index.html`, logo **depois** do `</section>` do `editor-card` e **antes** do `<button ... id="downloadButton">`:
+```js
+const width = personW * person.scale;
+const height = personH * person.scale;
+```
+
+Auto-fit:
+
+```js
+const scaleByWidth = (SIZE * 0.90) / personW;
+const scaleByHeight = (SIZE * 0.94) / personH;
+
+baseScale = Math.min(scaleByWidth, scaleByHeight);
+```
+
+---
+
+# Task 6b — Rotação manual
+
+Correção para foto sem EXIF ou com EXIF errado. A orientação automática continua valendo;
+isto é a saída de emergência.
+
+Estado da pessoa ganha um campo:
+
+```js
+person = { x, y, scale, rotation };   // rotation em radianos
+```
+
+## Desenho
+
+```js
+ctx.save();
+ctx.translate(person.x, person.y);
+ctx.rotate(person.rotation);
+ctx.drawImage(
+  personImage,
+  -personW * person.scale / 2,
+  -personH * person.scale / 2,
+  personW * person.scale,
+  personH * person.scale
+);
+ctx.restore();
+```
+
+Preview e exportação saem do mesmo canvas, então a rotação é preservada sem código extra.
+
+## Botão de 90°
 
 ```html
-      <div class="result-card" id="resultCard" hidden>
-        <img id="resultImage" alt="Arte pronta para salvar">
-        <p id="resultHint">Toque e segure na imagem para salvar em Fotos.</p>
-      </div>
+<button type="button" class="text-button" id="rotateButton">
+  <span>Girar 90°</span>
+</button>
 ```
 
-- [ ] **Step 2: Estilizar o bloco**
+Um toque, ângulo exato. É o caminho principal: muita gente não descobre que dois dedos
+também giram, e em aparelho básico o gesto combinado é impreciso.
 
-Ao final de `static/css/style.css`, antes do bloco `@media (min-width: 960px)`:
+Teclado: tecla `r` gira 90° no sentido horário, mantendo paridade com as setas já existentes.
 
-```css
-.result-card {
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  text-align: center;
-}
+## Gesto de dois dedos
 
-.result-card img {
-  display: block;
-  width: 100%;
-  border-radius: var(--radius-lg);
-}
-
-.result-card p {
-  margin: 10px 4px 0;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-```
-
-- [ ] **Step 3: Substituir o handler de download**
-
-Trocar todo o bloco `downloadButton.addEventListener("click", ...)` por:
+No gesto de pinça já se calcula distância e ponto médio. Acrescentar o ângulo:
 
 ```js
-  const resultCard = document.getElementById("resultCard");
-  const resultImage = document.getElementById("resultImage");
-  const resultHint = document.getElementById("resultHint");
+const angulo = Math.atan2(b.y - a.y, b.x - a.x);
+```
 
-  // iOS Safari costuma ignorar o atributo download e abrir a imagem em vez de
-  // salvá-la. Nesses aparelhos o caminho confiável é exibir o resultado para o
-  // usuário segurar e escolher "Salvar em Fotos".
-  const ehIOS = /iP(hone|ad|od)/.test(navigator.platform)
-    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+Durante o gesto: distância → zoom, ângulo → rotação, ponto médio → movimento.
 
-  function exportarArte() {
-    return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Não foi possível gerar o PNG."));
-      }, "image/png");
-    });
-  }
+### Zona morta e encaixe
 
-  downloadButton.addEventListener("click", async () => {
-    if (!personImage || isBusy) return;
+Sem proteção, quem só quer dar zoom termina com a foto 2° torta e não percebe.
 
-    setBusy(true, "Gerando a arte…", "Preparando o PNG em 1080×1080.");
+```js
+const ZONA_MORTA = 8 * Math.PI / 180;   // engata só depois de 8°
+const ENCAIXE    = 5 * Math.PI / 180;   // gruda em 0/90/180/270 dentro de 5°
+```
 
-    try {
-      draw();
-      const blob = await exportarArte();
-      const url = URL.createObjectURL(blob);
-      const nome = `arte-campanha-${selectedMask}-1080x1080.png`;
+A rotação só passa a acompanhar o gesto depois que o giro acumulado ultrapassa a zona
+morta. Ao soltar os dedos, se o ângulo estiver a menos de `ENCAIXE` de um múltiplo de 90°,
+encaixa nele.
 
-      if (ehIOS) {
-        resultImage.src = url;
-        resultCard.hidden = false;
-        resultHint.textContent = "Toque e segure na imagem para salvar em Fotos.";
-        resultCard.scrollIntoView({ behavior: "smooth", block: "center" });
-        showToast("Arte pronta. Segure na imagem para salvar.", "success");
-      } else {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = nome;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 3000);
-        showToast("Imagem gerada com sucesso.", "success");
-      }
-    } catch (error) {
-      showToast(error.message || "Não foi possível gerar a imagem.", "error");
-    } finally {
-      setBusy(false);
-    }
+## Clamp com imagem girada
+
+`clampPerson()` usa largura e altura para manter a pessoa dentro do canvas. Imagem girada
+ocupa uma caixa maior, e ignorar isso faz a trava errar perto de 45°.
+
+```js
+function bboxGirado(w, h, rotation) {
+  const c = Math.abs(Math.cos(rotation));
+  const s = Math.abs(Math.sin(rotation));
+  return { w: w * c + h * s, h: w * s + h * c };
+}
+```
+
+`clampPerson()` deve usar essas medidas, não `personW * scale` direto.
+
+## Invalidação
+
+Girar altera o canvas, então entra na lista da Task 9: esconde o `resultCard`.
+
+## Centralizar
+
+O botão "Centralizar" reposiciona e reenquadra, mas **preserva a rotação** — o usuário a
+escolheu de propósito.
+
+---
+
+# Task 7 — Validação de arquivo
+
+Criar:
+
+```js
+const ALLOWED_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
+```
+
+Validar **antes** de ler/decodificar.
+
+Aplicar igualmente em:
+
+* file input;
+* drag-and-drop.
+
+Não usar apenas:
+
+```js
+file.type.startsWith("image/")
+```
+
+---
+
+# Task 8 — Exportar diretamente do canvas
+
+Eliminar totalmente:
+
+```text
+processedBlob
+responseError()
+fetch("/api/render")
+FormData
+```
+
+Implementar:
+
+```js
+function exportarArte() {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Não foi possível gerar a imagem."));
+    }, "image/png");
   });
+}
 ```
 
-- [ ] **Step 4: Remover o que ficou órfão**
+Antes da exportação:
 
-`processedBlob` e `responseError` deixam de ter uso. Conferir e apagar:
-
-```bash
-grep -n "processedBlob\|responseError\|/api/render" static/js/editor.js
+```js
+draw();
 ```
 
-Apagar a declaração `let processedBlob = null;`, a atribuição `processedBlob = blob;` dentro de `loadPersonFromBlob` e a função `responseError` inteira. Rodar o `grep` de novo — deve não retornar nada.
+O Blob deve representar exatamente o canvas atual.
 
-- [ ] **Step 5: Testar que o download não toca mais a rede**
+---
 
-```bash
-node -e "
-const { runCase } = require('./tests/harness');
-const path = require('path');
-runCase({ url:'http://127.0.0.1:5000/', photoPath: path.resolve('tests/fixtures/12mp.jpg') })
-  .then(r => {
-    const fs = require('fs');
-    fs.writeFileSync('/tmp/t3-previa.png', r.previewPng);
-    fs.writeFileSync('/tmp/t3-baixado.png', r.downloadPng);
-    console.log('prévia', r.previewPng.length, '| baixado', r.downloadPng.length);
-    if (!r.previewPng.equals(r.downloadPng)) throw new Error('prévia e download diferem');
-    console.log('IDÊNTICOS byte a byte');
-  })
-  .catch(e => { console.error('FALHOU:', e.message); process.exit(1); });
-"
+# Task 9 — Resultado e iOS
+
+Adicionar:
+
+```html
+<div class="result-card" id="resultCard" hidden>
+  <img id="resultImage" alt="Arte pronta para salvar">
+  <p id="resultHint">Toque e segure na imagem para salvar em Fotos.</p>
+</div>
 ```
 
-Esperado: `IDÊNTICOS byte a byte`. Agora os dois saem do mesmo `canvas`, então a igualdade é exata — diferente da comparação com o Pillow, que tinha 1px de antialiasing.
+Manter estado:
 
-- [ ] **Step 6: Commit**
+```js
+let resultUrl = null;
+```
 
-```bash
-git add static/js/editor.js static/css/style.css templates/index.html
-git commit -m "feat: gera o PNG final no navegador, sem passar pelo servidor"
+Ao gerar nova imagem:
+
+```js
+if (resultUrl) {
+  URL.revokeObjectURL(resultUrl);
+}
+
+resultUrl = URL.createObjectURL(blob);
+```
+
+### iOS
+
+Quando necessário:
+
+```text
+mostrar imagem
+→ orientar usuário a tocar e segurar
+→ "Salvar em Fotos"
+```
+
+### Outros navegadores
+
+Usar download:
+
+```js
+const link = document.createElement("a");
+link.href = url;
+link.download = nome;
+link.click();
+```
+
+Revoke do URL após uso.
+
+---
+
+## Invalidar resultado antigo
+
+Ocultar `resultCard` quando ocorrer:
+
+* nova foto;
+* drag/movimento;
+* zoom;
+* rotação (gesto ou botão);
+* centralização;
+* troca de máscara.
+
+O resultado exibido nunca pode representar um estado anterior do canvas.
+
+---
+
+# Task 10 — Converter HTML para estático
+
+Mover:
+
+```text
+templates/index.html
+→
+index.html
+```
+
+Remover todas as chamadas Jinja:
+
+```text
+{{ url_for(...) }}
+```
+
+Usar caminhos estáticos:
+
+```html
+<link rel="stylesheet" href="/static/css/style.css">
+<script src="/static/js/editor.js" defer></script>
+
+<img src="/static/img/mascara-rosa-v1.png">
+<img src="/static/img/mascara-azul-v1.png">
 ```
 
 ---
 
-### Task 4: Virar site estático
+# Task 11 — Atualizar privacidade
 
-**Files:**
-- Create: `index.html`
-- Create: `.vercelignore`
-- Modify: `vercel.json`
-- Delete: `app.py`, `requirements.txt`, `Dockerfile`, `Procfile`, `templates/index.html`
+Substituir o texto atual por:
 
-- [ ] **Step 1: Converter o template**
+> A foto é processada no seu próprio aparelho e não é enviada para nenhum servidor.
 
-```bash
-git mv templates/index.html index.html
-rmdir templates
+---
+
+# Task 12 — Versionar máscaras
+
+Renomear:
+
+```text
+mascara-rosa.png
+→ mascara-rosa-v1.png
+
+mascara-azul.png
+→ mascara-azul-v1.png
 ```
 
-Trocar as cinco chamadas Jinja por caminhos diretos:
+Atualizar todas as referências.
 
-```bash
-sed -i \
-  -e "s|{{ url_for('static', filename='css/style.css') }}|static/css/style.css|g" \
-  -e "s|{{ url_for('static', filename='js/editor.js') }}|static/js/editor.js|g" \
-  -e "s|{{ url_for('static', filename='img/mascara-rosa.png') }}|static/img/mascara-rosa.png|g" \
-  -e "s|{{ url_for('static', filename='img/mascara-azul.png') }}|static/img/mascara-azul.png|g" \
-  index.html
-grep -c "url_for" index.html
+Mudanças futuras devem gerar:
+
+```text
+mascara-rosa-v2.png
+mascara-azul-v2.png
 ```
 
-Esperado: `0`.
+Não substituir silenciosamente conteúdo de arquivo marcado como `immutable`.
 
-- [ ] **Step 2: Atualizar o aviso de privacidade**
+---
 
-A foto deixa de sair do aparelho. Em `index.html`, substituir o texto dentro de `<p class="privacy-note">`:
+# Task 13 — Vercel estática
 
-```html
-      A foto é processada no seu próprio aparelho e não é enviada para nenhum servidor.
-```
+Reescrever `vercel.json` sem Python/build de Function.
 
-- [ ] **Step 3: Reescrever a configuração da Vercel**
-
-`vercel.json`:
+Exemplo:
 
 ```json
 {
@@ -635,270 +870,427 @@ A foto deixa de sair do aparelho. Em `index.html`, substituir o texto dentro de 
     {
       "source": "/static/img/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
       ]
     },
     {
       "source": "/static/(css|js)/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
       ]
     }
   ]
 }
 ```
 
-As máscaras somam 630 KB e nunca mudam — cache imutável tira esse peso de quem volta ao site. Já o CSS e o JS revalidam sempre, para que uma correção chegue ao usuário no próximo carregamento.
+O cache `immutable` só é permitido porque as máscaras agora possuem versionamento no nome.
 
-- [ ] **Step 4: Manter o material de desenvolvimento fora do deploy**
+---
 
-`.vercelignore`:
+# Task 14 — Remover backend
 
+Excluir:
+
+```bash
+git rm app.py
+git rm requirements.txt
+git rm Dockerfile
+git rm Procfile
 ```
+
+Remover `templates/` após mover o HTML.
+
+Conferir:
+
+```bash
+grep -RniE "api/render|Flask|flask|gunicorn|Pillow|send_file" \
+  --include="*.js" \
+  --include="*.html" \
+  --include="*.json" .
+```
+
+Ignorar deliberadamente:
+
+```text
+tests/
+docs/
+legacy references
+```
+
+Produção não pode conter nenhuma referência ativa ao backend.
+
+---
+
+# Task 15 — `.vercelignore`
+
+Criar:
+
+```text
 .venv/
 __pycache__/
-docs/
 tests/
+docs/
 requirements-dev.txt
 ```
 
-- [ ] **Step 5: Apagar o backend**
-
-```bash
-git rm app.py requirements.txt Dockerfile Procfile
-```
-
-- [ ] **Step 6: Conferir que não sobrou nenhuma referência**
-
-```bash
-grep -rn "api/render\|flask\|Flask\|gunicorn\|rembg" --include=*.js --include=*.html --include=*.json . | grep -v node_modules | grep -v "^./docs/"
-```
-
-Esperado: nenhuma saída.
-
-- [ ] **Step 7: Servir localmente e validar**
-
-```bash
-python -m http.server 8000 &
-node -e "
-const { runCase } = require('./tests/harness');
-const path = require('path');
-runCase({ url:'http://127.0.0.1:8000/', photoPath: path.resolve('tests/fixtures/12mp.jpg'), porta: 9401 })
-  .then(r => {
-    if (!r.previewPng.equals(r.downloadPng)) throw new Error('prévia e download diferem');
-    console.log('site estático OK — prévia == download');
-  })
-  .catch(e => { console.error('FALHOU:', e.message); process.exit(1); });
-"
-```
-
-Esperado: `site estático OK — prévia == download`, servido sem nenhum processo Python envolvido no request.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add -A
-git commit -m "refactor: remove o backend Python e serve o site como estático"
-```
+Fixtures e Pillow não entram no deploy.
 
 ---
 
-### Task 5: Matriz de testes das fotos-problema
+# Task 16 — Teste WYSIWYG correto
 
-**Files:**
-- Create: `tests/run.js`
-- Create: `tests/compare.py`
+Não comparar PNGs pelos bytes do arquivo.
 
-**Interfaces:**
-- Consome: `runCase()` (Task 1), fixtures (Task 1), site estático (Task 4).
-
-- [ ] **Step 1: Escrever o comparador de imagens**
-
-`tests/compare.py`:
-
-```python
-"""Confere geometria e orientação de uma arte gerada."""
-import sys
-
-from PIL import Image
-
-CANVAS = 1080
-
-
-def marco_verde(caminho: str):
-    """Devolve o centro do quadrado verde, que fica no canto superior esquerdo
-    da foto original. Se a orientação EXIF for ignorada, ele aparece em outro
-    canto e o teste acusa."""
-    im = Image.open(caminho).convert("RGB")
-    if im.size != (CANVAS, CANVAS):
-        print(f"ERRO: esperado {CANVAS}x{CANVAS}, veio {im.size}")
-        sys.exit(1)
-    px = im.load()
-    xs, ys = [], []
-    for y in range(0, CANVAS, 2):
-        for x in range(0, CANVAS, 2):
-            r, g, b = px[x, y]
-            if g > 150 and r < 110 and b < 110:
-                xs.append(x)
-                ys.append(y)
-    if not xs:
-        return None
-    return (sum(xs) // len(xs), sum(ys) // len(ys))
-
-
-if __name__ == "__main__":
-    caminho = sys.argv[1]
-    centro = marco_verde(caminho)
-    print(f"{caminho}: marco verde em {centro}")
-```
-
-- [ ] **Step 2: Escrever a matriz**
-
-`tests/run.js`:
+Errado:
 
 ```js
-// Roda a matriz de fotos-problema contra o site e emite um veredito.
-const fs = require("fs");
-const path = require("path");
-const { runCase } = require("./harness");
-
-const URL_BASE = process.env.TEST_URL || "http://127.0.0.1:8000/";
-const FIX = path.join(__dirname, "fixtures");
-const SAIDA = path.join(__dirname, "saida");
-
-const CASOS = [
-  { arquivo: "12mp.jpg", desc: "foto típica de celular (4000x3000)" },
-  { arquivo: "48mp.jpg", desc: "foto de 48 MP (8000x6000)" },
-  { arquivo: "exif6.jpg", desc: "retrato com EXIF 6 (girado 90° horário)" },
-  { arquivo: "exif8.jpg", desc: "retrato com EXIF 8 (girado 90° anti-horário)" },
-  { arquivo: "transparente.png", desc: "PNG com margens transparentes" },
-  { arquivo: "foto.webp", desc: "WEBP" },
-  { arquivo: "pesada.jpg", desc: "arquivo perto do teto de 15 MB" },
-];
-
-(async () => {
-  fs.mkdirSync(SAIDA, { recursive: true });
-  let falhas = 0;
-  let porta = 9410;
-
-  for (const caso of CASOS) {
-    const foto = path.join(FIX, caso.arquivo);
-    process.stdout.write(`${caso.arquivo.padEnd(20)} ${caso.desc.padEnd(42)} `);
-    const t0 = Date.now();
-    try {
-      const r = await runCase({ url: URL_BASE, photoPath: foto, porta: porta++ });
-      const base = path.join(SAIDA, caso.arquivo.replace(/\.\w+$/, ""));
-      fs.writeFileSync(`${base}-previa.png`, r.previewPng);
-      fs.writeFileSync(`${base}-baixado.png`, r.downloadPng);
-
-      if (!r.previewPng.equals(r.downloadPng)) {
-        console.log(`FALHOU (prévia != download)`);
-        falhas++;
-        continue;
-      }
-      console.log(`OK  ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    } catch (e) {
-      console.log(`FALHOU (${e.message})`);
-      falhas++;
-    }
-  }
-
-  console.log(`\n${CASOS.length - falhas}/${CASOS.length} casos passaram`);
-  console.log(`imagens em ${SAIDA} — conferir orientação com tests/compare.py`);
-  process.exit(falhas ? 1 : 0);
-})();
+previewPng.equals(downloadPng)
 ```
 
-- [ ] **Step 3: Rodar a matriz**
+Duas codificações PNG podem representar pixels idênticos usando bytes diferentes.
 
-```bash
-node tests/run.js
+O teste obrigatório é:
+
+```text
+preview PNG
+→ decodificar
+
+download PNG
+→ decodificar
+
+comparar pixels RGBA
 ```
 
-Esperado: `7/7 casos passaram`. Qualquer `FALHOU` aponta o caso e a causa.
+Critério:
 
-- [ ] **Step 4: Conferir orientação de cada saída**
-
-```bash
-for f in tests/saida/*-baixado.png; do ./.venv/Scripts/python.exe tests/compare.py "$f"; done
+```text
+largura = 1080
+altura = 1080
+pixels diferentes = 0
 ```
 
-O quadrado verde marca o canto **superior esquerdo** da foto original. Em `exif6` e `exif8` ele precisa aparecer em cantos **diferentes** entre si — se cair no mesmo lugar nos dois, a orientação EXIF foi ignorada.
+`tests/compare.py` deve falhar no primeiro/total de pixels divergentes e retornar exit code diferente de zero.
 
-- [ ] **Step 5: Inspecionar visualmente as sete artes**
-
-Abrir cada `tests/saida/*-baixado.png` e confirmar: pessoa enquadrada, máscara por cima, sem distorção de proporção e sem faixa transparente ou preta.
-
-- [ ] **Step 6: Commit**
+Interface:
 
 ```bash
-git add tests/run.js tests/compare.py
-git commit -m "test: matriz de fotos-problema com verificação de orientação"
+python tests/compare.py preview.png download.png
+```
+
+Esperado:
+
+```text
+OK: 1080x1080, 0 pixels diferentes
 ```
 
 ---
 
-### Task 6: Deploy de Preview e teste em aparelho real
+# Task 17 — Matriz automatizada
 
-**Files:** nenhum arquivo de código; esta task é o portão antes da produção.
+Casos obrigatórios:
 
-- [ ] **Step 1: Publicar a branch**
+| Caso                | Objetivo                                 |
+| ------------------- | ---------------------------------------- |
+| `12mp.jpg`          | provar correção do bug WYSIWYG atual     |
+| `48mp.jpg`          | memória/performance                      |
+| retrato + zoom 250% | validar qualidade com cap 2800           |
+| `exif1.jpg` … `exif8.jpg` | as oito orientações, transform próprio |
+| rotação manual      | gesto e botão preservados na exportação  |
+| `transparente.png`  | preservar margens/transparência da fonte |
+| `foto.webp`         | compatibilidade                          |
+| `pesada.jpg`        | arquivo real entre 14–15 MB              |
+| MIME inválido       | rejeição antes da decodificação          |
+| >15 MB              | rejeição imediata                        |
+
+Para todos os casos aceitos:
+
+```text
+preview pixels == download pixels
+```
+
+Também verificar:
+
+```text
+nenhum request /api/*
+```
+
+---
+
+# Task 18 — Teste específico de EXIF
+
+Usar os marcadores geométricos das fixtures.
+
+Confirmar que:
+
+```text
+EXIF 6
+≠
+EXIF 8
+```
+
+em orientação visual correta.
+
+Não considerar sucesso apenas porque a imagem carregou.
+
+---
+
+# Task 19 — Teste de memória
+
+## Desktop
+
+Executar `48mp.jpg` e confirmar:
+
+* carrega;
+* editor continua responsivo;
+* drag fluido;
+* zoom funciona;
+* exportação funciona.
+
+## Android básico
+
+Teste obrigatório com:
+
+```text
+48 MP
+```
+
+Resultado aceitável:
+
+### Caminho A
+
+```text
+carrega usando pipeline otimizada
+→ aba permanece estável
+```
+
+### Caminho B
+
+```text
+browser incompatível
+→ app recusa de forma controlada
+→ mostra mensagem amigável
+```
+
+Resultado inaceitável:
+
+```text
+aba fecha
+aba recarrega
+browser mata processo
+interface congela
+```
+
+---
+
+# Task 20 — Servir localmente como site estático
+
+Executar um servidor estático apenas para teste:
+
+```bash
+python -m http.server 8000
+```
+
+Python aqui é ferramenta local, não parte da aplicação.
+
+Executar a matriz contra:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Critério:
+
+```text
+todos os casos automatizados aprovados
+/api/render inexistente
+```
+
+---
+
+# Task 21 — Inspeção visual
+
+Abrir as artes geradas e verificar:
+
+* máscara correta;
+* posição correta;
+* zoom correto;
+* sem distorção;
+* sem faixas pretas;
+* PNG transparente com geometria esperada;
+* foto 12 MP igual ao preview;
+* retrato no zoom máximo sem degradação inesperada.
+
+---
+
+# Task 22 — Preview Vercel
+
+Após todos os testes locais:
 
 ```bash
 git push origin dev
 ```
 
-A Vercel cria um deploy de Preview automaticamente para a branch `dev`.
+Usar o Preview criado pela Vercel.
 
-- [ ] **Step 2: Confirmar que o deploy não tem Function**
+Confirmar:
 
-Consultar o deployment da branch `dev` e verificar que `lambdaRuntimeStats` está vazio e `type` não é `LAMBDAS`. Se ainda aparecer runtime Python, o `vercel.json` da Task 4 não foi aplicado.
-
-- [ ] **Step 3: Rodar a matriz contra o Preview**
-
-```bash
-TEST_URL="https://<url-do-preview>/" node tests/run.js
+```text
+site servido estaticamente
+nenhuma Function Python
+nenhuma Function para /api/render
 ```
 
-Esperado: `7/7 casos passaram`.
+Rodar a matriz automatizada contra a URL do Preview.
 
-- [ ] **Step 4: Testar em aparelho real**
+---
 
-Abrir a URL de Preview e percorrer o fluxo completo — enviar foto, arrastar, dar zoom, trocar máscara, baixar — em:
+# Task 23 — Testes em dispositivos reais
 
-- iPhone (Safari) — confirmar que o bloco de resultado aparece e que segurar a imagem oferece "Salvar em Fotos"
-- Android intermediário (Chrome) — confirmar que o arquivo cai na pasta de downloads
-- Android básico — enviar a foto de 48 MP e confirmar que a aba não recarrega por falta de memória
+## iPhone / Safari
 
-- [ ] **Step 5: Merge em produção**
+* [ ] selecionar foto;
+* [ ] mover;
+* [ ] zoom;
+* [ ] trocar máscara;
+* [ ] gerar;
+* [ ] visualizar resultado;
+* [ ] salvar em Fotos.
 
-Só após os três aparelhos passarem:
+## Android intermediário / Chrome
+
+* [ ] fluxo completo;
+* [ ] download;
+* [ ] 12 MP;
+* [ ] WEBP.
+
+## Android básico
+
+* [ ] fluxo normal;
+* [ ] 48 MP;
+* [ ] foto 14–15 MB;
+* [ ] confirmar ausência de crash/reload;
+* [ ] validar rejeição segura caso necessário.
+
+---
+
+# Task 24 — Critério de GO
+
+Só liberar produção quando todos forem verdadeiros:
+
+```text
+✓ site 100% estático
+✓ nenhuma Function
+✓ /api/render inexistente
+✓ foto nunca enviada
+✓ JPEG OK
+✓ PNG OK
+✓ WEBP OK
+✓ EXIF 1–8 OK
+✓ rotação manual preservada na exportação
+✓ zona morta impede rotação acidental no pinch
+✓ 12 MP OK
+✓ 48 MP OK ou rejeição segura em browser incompatível
+✓ arquivo 14–15 MB OK
+✓ >15 MB rejeitado antes da decodificação
+✓ MIME inválido rejeitado
+✓ zoom 250% OK
+✓ WYSIWYG com 0 pixels diferentes
+✓ nenhuma chamada /api/*
+✓ iPhone real OK
+✓ Android intermediário OK
+✓ Android básico OK
+✓ legacy-server preservado
+✓ tag pre-client-render preservada
+```
+
+Qualquer falha acima bloqueia produção.
+
+---
+
+# Task 25 — Merge
+
+Após GO:
 
 ```bash
 git checkout master
+git pull --ff-only
 git merge dev
 git push origin master
 ```
 
-- [ ] **Step 6: Verificar produção**
-
-```bash
-TEST_URL="https://tocomgd.vercel.app/" node tests/run.js
-curl -s -o /dev/null -w "%{http_code}\n" https://tocomgd.vercel.app/api/render
-```
-
-Esperado: `7/7 casos passaram` e `404` na rota antiga — prova de que não existe mais Function.
+Aguardar o deployment de produção finalizar.
 
 ---
 
-## Rollback
+# Task 26 — Verificação pós-deploy
 
-O commit `8886dd1` (`master` antes da migração) contém a versão Flask com o WYSIWYG já corrigido. Para voltar:
+Executar a matriz contra:
 
-```bash
-git checkout master
-git reset --hard 8886dd1
-git push --force origin master
+```text
+https://tocomgd.vercel.app/
 ```
 
-A Vercel refaz o deploy sozinho a partir do push.
+Verificar:
+
+```bash
+curl -i https://tocomgd.vercel.app/api/render
+```
+
+Esperado:
+
+```text
+404
+```
+
+Também confirmar na Vercel que não existem invocações de Function para o novo deployment.
+
+Fazer um teste manual final de download.
+
+---
+
+# Rollback
+
+Se surgir problema grave em produção:
+
+1. interromper novas mudanças;
+2. identificar o deployment anterior ou tag `pre-client-render`;
+3. restaurar a versão anterior usando rollback/redeploy ou commit de reversão;
+4. não usar fallback automático para `/api/render`;
+5. não fazer force-push salvo situação excepcional e deliberada.
+
+Preservar:
+
+```text
+legacy-server
+pre-client-render
+```
+
+até o evento terminar e a nova versão estar comprovadamente estável.
+
+---
+
+# Fora do escopo
+
+Não adicionar durante esta migração:
+
+* banco de dados;
+* autenticação;
+* galeria;
+* backend de analytics;
+* JPEG como novo formato de saída;
+* framework;
+* build system;
+* novas funcionalidades visuais;
+* refatorações não necessárias.
+
+Primeiro objetivo:
+
+> **corrigir WYSIWYG, remover backend e tornar o sistema seguro para o pico.**
+
+Melhorias posteriores ficam para outro ciclo.
