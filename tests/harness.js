@@ -360,6 +360,31 @@ async function selectPhotoFile(cdp, absPhotoPath) {
   });
 }
 
+async function selectFormat(cdp, formatId, timeoutMs) {
+  const expression = `
+    (function () {
+      const button = document.querySelector(${JSON.stringify(`button[data-format="${formatId}"]`)});
+      if (!button) throw new Error("Formato não encontrado: ${formatId}");
+      button.click();
+      return true;
+    })()
+  `;
+  const result = await cdp.send("Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    userGesture: true,
+  });
+  if (result.exceptionDetails) {
+    throw new Error(`Falha ao selecionar formato ${formatId}: ${describeException(result.exceptionDetails)}`);
+  }
+
+  await waitForCondition(
+    cdp,
+    `document.querySelector("button[data-format='${formatId}']")?.getAttribute("aria-checked") === "true"`,
+    timeoutMs
+  );
+}
+
 async function capturePreviewPng(cdp) {
   const result = await cdp.send("Runtime.evaluate", {
     expression: "document.getElementById('artCanvas').toDataURL('image/png')",
@@ -532,6 +557,7 @@ async function captureStaleExportState(cdp, timeoutMs) {
 async function runCase({
   url,
   photoPath,
+  format = "quadrado",
   viewport,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   headless = true,
@@ -581,6 +607,7 @@ async function runCase({
     await cdp.send("Page.navigate", { url });
     await withTimeout(loadEventFired, timeoutMs, `carregamento de ${url}`);
 
+    await selectFormat(cdp, format, timeoutMs);
     await selectPhotoFile(cdp, absPhotoPath);
 
     await waitForCondition(

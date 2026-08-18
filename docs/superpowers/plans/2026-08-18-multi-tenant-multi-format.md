@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [////////........................] 25%
-Tasks: 4/16
+Progresso: [//////////......................] 31.25%
+Tasks: 5/16
 
 Atualização
 
@@ -420,7 +420,7 @@ concluída
 
 Matriz WYSIWYG multi-formato
 
-pendente
+concluída
 
 6
 

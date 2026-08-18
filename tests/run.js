@@ -22,6 +22,11 @@ const DEFAULT_CASES = [
   "foto.webp",
   "pesada.jpg",
 ];
+const FORMAT_CASES = [
+  { format: "quadrado", cases: DEFAULT_CASES },
+  { format: "feed", cases: ["12mp.jpg", "exif6.jpg", "pesada.jpg"] },
+  { format: "story", cases: ["12mp.jpg", "exif6.jpg", "pesada.jpg"] },
+];
 const EXPECTED_TOP_MARKERS = {
   1: ["verde", "vermelho"],
   2: ["vermelho", "verde"],
@@ -96,47 +101,57 @@ async function main() {
   const [url = "http://127.0.0.1:8000/", outDirArg = "tests/.tmp-matrix", timeoutArg] = process.argv.slice(2);
   const outDir = path.resolve(ROOT, outDirArg);
   const timeoutMs = timeoutArg ? Number(timeoutArg) : 120_000;
-  const cases = process.env.CASES ? process.env.CASES.split(",") : DEFAULT_CASES;
+  const matrix = process.env.CASES
+    ? [{ format: process.env.FORMAT || "quadrado", cases: process.env.CASES.split(",") }]
+    : FORMAT_CASES;
   fs.mkdirSync(outDir, { recursive: true });
 
-  for (const caseName of cases) {
-    const photoPath = path.join(FIXTURES, caseName);
-    const caseDir = path.join(outDir, path.basename(caseName, path.extname(caseName)));
-    fs.mkdirSync(caseDir, { recursive: true });
-    process.stdout.write(`\n> ${caseName}\n`);
+  let totalCases = 0;
+  for (const { format, cases } of matrix) {
+    for (const caseName of cases) {
+      totalCases += 1;
+      const photoPath = path.join(FIXTURES, caseName);
+      const caseDir = path.join(outDir, format, path.basename(caseName, path.extname(caseName)));
+      fs.mkdirSync(caseDir, { recursive: true });
+      process.stdout.write(`\n> ${format}/${caseName}\n`);
 
-    const result = await runCase({
+      const result = await runCase({
+        url,
+        photoPath,
+        format,
+        viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+        timeoutMs,
+      });
+      assertNoApiRequests(result.networkRequests, `${format}/${caseName}`);
+
+      const previewPath = path.join(caseDir, "preview.png");
+      const downloadPath = path.join(caseDir, "download.png");
+      fs.writeFileSync(previewPath, result.previewPng);
+      fs.writeFileSync(downloadPath, result.downloadPng);
+      runPythonCompare(previewPath, downloadPath);
+      assertExifMarkers(caseName, previewPath);
+    }
+  }
+
+  for (const format of ["quadrado", "story"]) {
+    process.stdout.write(`\n> corrida de exportação com zoom (${format})\n`);
+    const race = await runCase({
       url,
-      photoPath,
+      format,
+      photoPath: path.join(FIXTURES, "12mp.jpg"),
       viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
       timeoutMs,
+      raceDuringExport: true,
     });
-    assertNoApiRequests(result.networkRequests, caseName);
-
-    const previewPath = path.join(caseDir, "preview.png");
-    const downloadPath = path.join(caseDir, "download.png");
-    fs.writeFileSync(previewPath, result.previewPng);
-    fs.writeFileSync(downloadPath, result.downloadPng);
-    runPythonCompare(previewPath, downloadPath);
-    assertExifMarkers(caseName, previewPath);
+    if (!race.raceState || race.raceState.resultHidden !== true || race.raceState.resultImageSrc) {
+      throw new Error(`${format}: resultCard exibiu blob obsoleto após mudança de zoom`);
+    }
+    if (race.raceState.zoomValue !== "150") {
+      throw new Error(`${format}: mudança de zoom não foi aplicada`);
+    }
   }
 
-  process.stdout.write("\n> corrida de exportação com zoom\n");
-  const race = await runCase({
-    url,
-    photoPath: path.join(FIXTURES, "12mp.jpg"),
-    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
-    timeoutMs,
-    raceDuringExport: true,
-  });
-  if (!race.raceState || race.raceState.resultHidden !== true || race.raceState.resultImageSrc) {
-    throw new Error("corrida de exportação: resultCard exibiu blob obsoleto após mudança de zoom");
-  }
-  if (race.raceState.zoomValue !== "150") {
-    throw new Error("corrida de exportação: mudança de zoom não foi aplicada");
-  }
-
-  console.log(`\nOK: ${cases.length} casos, corrida de zoom, WYSIWYG e rede verificados`);
+  console.log(`\nOK: ${totalCases} casos, 2 corridas de zoom, WYSIWYG e rede verificados`);
 }
 
 main().catch((error) => {
