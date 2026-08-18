@@ -6,7 +6,8 @@
     "title": "Monte sua foto com João!",
     "description": "Escolha um formato e personalize sua foto.",
     "primaryColor": "#14b8a6",
-    "secondaryColor": "#0ea5e9"
+    "secondaryColor": "#0ea5e9",
+    "logo": "logo.svg"
   },
   "formats": ["quadrado", "feed", "story"],
   "templates": [

@@ -79,3 +79,26 @@ test("config recebe cache revalidável", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate");
 });
+
+test("servidor aplica os headers reais de public/_headers", async (t) => {
+  const server = createServer(path.resolve(__dirname, "..", "public"));
+  const port = await listen(server);
+  t.after(() => server.close());
+
+  const headersFile = fs.readFileSync(
+    path.resolve(__dirname, "..", "public", "_headers"),
+    "utf8"
+  );
+  const expectedCsp = headersFile.match(/Content-Security-Policy:\s*(.+)/)?.[1].trim();
+  assert.ok(expectedCsp, "CSP não declarada em public/_headers");
+
+  const response = await request(port, "/gd");
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-security-policy"), expectedCsp);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+  assert.equal(
+    response.headers.get("permissions-policy"),
+    "camera=(), microphone=(), geolocation=()"
+  );
+});

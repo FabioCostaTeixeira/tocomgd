@@ -18,6 +18,7 @@ function contentType(filePath) {
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".png": "image/png",
+    ".svg": "image/svg+xml",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
@@ -25,8 +26,60 @@ function contentType(filePath) {
   return types[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
+function headerPatternRegExp(pattern) {
+  const expression = pattern
+    .split("/")
+    .map((segment) => {
+      if (segment === "*") return ".*";
+      if (segment.startsWith(":")) return "[^/]+";
+      return segment.replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&");
+    })
+    .join("/");
+  return new RegExp(`^${expression}$`);
+}
+
+function readHeaderRules(rootDir) {
+  const headersPath = path.join(rootDir, "_headers");
+  if (!fs.existsSync(headersPath)) return [];
+
+  const rules = [];
+  let currentRule = null;
+  for (const line of fs.readFileSync(headersPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    if (!/^\s/.test(line)) {
+      currentRule = { pattern: trimmed, headers: {} };
+      rules.push(currentRule);
+      continue;
+    }
+
+    const separator = trimmed.indexOf(":");
+    if (currentRule && separator > 0) {
+      const name = trimmed.slice(0, separator).trim();
+      const value = trimmed.slice(separator + 1).trim();
+      currentRule.headers[name] = value;
+    }
+  }
+
+  return rules.map((rule) => ({
+    ...rule,
+    matcher: headerPatternRegExp(rule.pattern),
+  }));
+}
+
+function headersForPath(rules, pathname) {
+  return Object.assign(
+    {},
+    ...rules
+      .filter((rule) => rule.matcher.test(pathname))
+      .map((rule) => rule.headers)
+  );
+}
+
 function createServer(rootDir = DEFAULT_ROOT) {
   const base = path.resolve(rootDir);
+  const headerRules = readHeaderRules(base);
 
   return http.createServer((request, response) => {
     let pathname;
@@ -70,10 +123,15 @@ function createServer(rootDir = DEFAULT_ROOT) {
       }
 
       const headers = {
+        ...headersForPath(headerRules, pathname),
         "Content-Type": contentType(filePath),
         "Content-Length": fs.statSync(filePath).size,
       };
-      if (pathname.startsWith("/static/tenants/") && path.basename(filePath) === "config.json") {
+      if (
+        pathname.startsWith("/static/tenants/") &&
+        path.basename(filePath) === "config.json" &&
+        !headers["Cache-Control"]
+      ) {
         headers["Cache-Control"] = "public, max-age=0, must-revalidate";
       }
 
