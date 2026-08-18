@@ -164,6 +164,23 @@ test("validateConfig rejeita formatos, templates, assets e defaults inválidos",
   }
 });
 
+test("validateConfig suporta quantidade variável de templates", () => {
+  for (const count of [1, 2, 5, 10]) {
+    const raw = config();
+    raw.templates = Array.from({ length: count }, (_, index) => ({
+      id: `modelo-${index + 1}`,
+      name: `Modelo ${index + 1}`,
+      assets: {
+        quadrado: "masks/principal/quadrado.png",
+        story: "masks/principal/story.png",
+      },
+    }));
+    raw.defaults.template = "modelo-1";
+    const tenant = validateConfig(raw, "joao");
+    assert.equal(tenant.templates.length, count);
+  }
+});
+
 test("loadTenant busca config sem query e trata rede, HTTP, JSON e schema", async () => {
   const calls = [];
   const response = (body, status = 200) => ({

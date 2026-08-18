@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { runCase } = require("./harness");
+const { probePage, runCase } = require("./harness");
 
 const ROOT = path.resolve(__dirname, "..");
 const FIXTURES = path.join(__dirname, "fixtures");
@@ -164,6 +164,59 @@ async function main() {
   }
 
   const origin = new URL(url).origin;
+  process.stdout.write("\n> rotas, brand e isolamento\n");
+  const probes = {};
+  for (const route of ["/", "/gd", "/joao", "/inexistente", "/admin", "/Joao"]) {
+    probes[route] = await probePage({ url: `${origin}${route}`, timeoutMs });
+    assertNoApiRequests(probes[route].networkRequests, route);
+  }
+  if (!probes["/"].state.landing || probes["/"].state.app || probes["/"].state.error ||
+      !probes["/gd"].state.app || !probes["/joao"].state.app ||
+      !probes["/inexistente"].state.error || !probes["/admin"].state.error ||
+      !probes["/Joao"].state.error) {
+    throw new Error(`estado de rotas inválido: ${JSON.stringify(Object.fromEntries(Object.entries(probes).map(([route, result]) => [route, result.state])))}`);
+  }
+  if (probes["/gd"].state.templates !== 2 || JSON.stringify(probes["/gd"].state.formats) !== JSON.stringify(["quadrado"]) ||
+      probes["/joao"].state.templates !== 1 || JSON.stringify(probes["/joao"].state.formats) !== JSON.stringify(["quadrado", "feed", "story"])) {
+    throw new Error("brand/configuração dinâmica não corresponde ao tenant");
+  }
+  const gdRequests = probes["/gd"].networkRequests.map((requestUrl) => new URL(requestUrl).pathname);
+  const joaoRequests = probes["/joao"].networkRequests.map((requestUrl) => new URL(requestUrl).pathname);
+  if (gdRequests.some((requestPath) => requestPath.includes("/tenants/joao/")) ||
+      joaoRequests.some((requestPath) => requestPath.includes("/tenants/gd/"))) {
+    throw new Error("isolamento de assets entre tenants falhou");
+  }
+
+  process.stdout.write("\n> falha lazy de template sem unhandledrejection\n");
+  const lazyTemplate = await runCase({
+    url: `${origin}/gd`,
+    format: "quadrado",
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+    scenario: "lazy-template-error",
+  });
+  assertNoApiRequests(lazyTemplate.networkRequests, "lazy-template-error");
+  if (lazyTemplate.scenario.state.maskState !== "error" || !lazyTemplate.scenario.state.downloadDisabled ||
+      !lazyTemplate.scenario.state.toastVisible || lazyTemplate.scenario.state.unhandled.length !== 0) {
+    throw new Error(`falha lazy de template não foi controlada: ${JSON.stringify(lazyTemplate.scenario.state)}`);
+  }
+
+  process.stdout.write("\n> falha lazy de formato sem unhandledrejection\n");
+  const lazyFormat = await runCase({
+    url: `${origin}/joao`,
+    format: "quadrado",
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+    scenario: "lazy-format-error",
+  });
+  assertNoApiRequests(lazyFormat.networkRequests, "lazy-format-error");
+  if (lazyFormat.scenario.state.maskState !== "error" || !lazyFormat.scenario.state.downloadDisabled ||
+      !lazyFormat.scenario.state.toastVisible || lazyFormat.scenario.state.unhandled.length !== 0) {
+    throw new Error(`falha lazy de formato não foi controlada: ${JSON.stringify(lazyFormat.scenario.state)}`);
+  }
+
   process.stdout.write("\n> troca de template preserva enquadramento (gd)\n");
   const templateSwap = await runCase({
     url: `${origin}/gd`,

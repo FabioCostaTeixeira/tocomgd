@@ -425,6 +425,29 @@ async function selectTemplate(cdp, templateId, timeoutMs) {
   await waitForMaskReady(cdp, timeoutMs);
 }
 
+async function clickAndWaitForMaskError(cdp, selector, timeoutMs) {
+  const result = await cdp.send("Runtime.evaluate", {
+    expression: `
+      (function () {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) throw new Error("Seleção não encontrada: ${selector}");
+        element.click();
+        return true;
+      })()
+    `,
+    returnByValue: true,
+    userGesture: true,
+  });
+  if (result.exceptionDetails) throw new Error(`Falha ao iniciar troca: ${describeException(result.exceptionDetails)}`);
+
+  await waitForCondition(
+    cdp,
+    `document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-checked") === "true" || document.querySelector(${JSON.stringify(selector)})?.checked === true`,
+    timeoutMs
+  );
+  await waitForCondition(cdp, `document.querySelector("canvas")?.dataset.maskState === "error"`, timeoutMs);
+}
+
 async function capturePreviewPng(cdp) {
   const result = await cdp.send("Runtime.evaluate", {
     expression: "document.getElementById('artCanvas').toDataURL('image/png')",
@@ -715,6 +738,36 @@ async function runCase({
       };
     }
 
+    if (scenario === "lazy-template-error" || scenario === "lazy-format-error") {
+      await cdp.send("Network.setBlockedURLs", {
+        urls: [scenario === "lazy-template-error" ? "*masks/azul/quadrado.png*" : "*masks/principal/story.png*"],
+      });
+      await cdp.send("Runtime.evaluate", {
+        expression: `
+          window.__unhandledRejections = [];
+          window.addEventListener("unhandledrejection", (event) => {
+            window.__unhandledRejections.push(String(event.reason));
+          });
+        `,
+        returnByValue: true,
+      });
+      const selector = scenario === "lazy-template-error"
+        ? "input.template-radio[value='azul']"
+        : "button[data-format='story']";
+      await clickAndWaitForMaskError(cdp, selector, timeoutMs);
+      const stateResult = await cdp.send("Runtime.evaluate", {
+        expression: `({
+          maskState: document.querySelector("canvas")?.dataset.maskState,
+          downloadDisabled: document.getElementById("downloadButton")?.disabled,
+          toastVisible: document.getElementById("toast")?.hidden === false,
+          toastText: document.getElementById("toastMessage")?.textContent,
+          unhandled: window.__unhandledRejections,
+        })`,
+        returnByValue: true,
+      });
+      return { previewPng, scenario: { state: stateResult.result.value }, networkRequests };
+    }
+
     const downloadPng = await captureDownloadPng(cdp, timeoutMs);
 
     return { previewPng, downloadPng, networkRequests };
@@ -724,7 +777,51 @@ async function runCase({
   }
 }
 
-module.exports = { runCase };
+async function probePage({ url, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!url) throw new Error("probePage: parâmetro 'url' é obrigatório.");
+
+  const { child, port, userDataDir } = await launchChrome({
+    headless: true,
+    viewport: { width: 1280, height: 1024 },
+  });
+  const networkRequests = [];
+
+  try {
+    const cdp = await connectToPage(port);
+    await cdp.send("Page.enable");
+    await cdp.send("Network.enable");
+    await cdp.send("Runtime.enable");
+    cdp.on("Network.requestWillBeSent", (params) => {
+      if (params?.request?.url) networkRequests.push(params.request.url);
+    });
+
+    const loadEventFired = cdp.once("Page.loadEventFired");
+    await cdp.send("Page.navigate", { url });
+    await withTimeout(loadEventFired, timeoutMs, `carregamento de ${url}`);
+    await waitForCondition(cdp, "document.getElementById('appLoading')?.hidden === true", timeoutMs);
+
+    const stateResult = await cdp.send("Runtime.evaluate", {
+      expression: `({
+        loading: document.getElementById("appLoading")?.hidden,
+        app: document.getElementById("appShell")?.hidden === false,
+        landing: document.getElementById("landing")?.hidden === false,
+        error: document.getElementById("tenantError")?.hidden === false,
+        errorTitle: document.getElementById("tenantErrorTitle")?.textContent,
+        title: document.getElementById("brandTitle")?.textContent,
+        primaryColor: document.body.style.getPropertyValue("--brand-primary"),
+        templates: document.querySelectorAll("#templateGrid .template-card").length,
+        formats: [...document.querySelectorAll("#formatGrid [data-format]")].map((element) => element.dataset.format),
+      })`,
+      returnByValue: true,
+    });
+    return { state: stateResult.result.value, networkRequests };
+  } finally {
+    await killChromeTree(child);
+    await removeDirWithRetry(userDataDir);
+  }
+}
+
+module.exports = { runCase, probePage };
 
 // ---------------------------------------------------------------------
 // CLI: node tests/harness.js <url> <photoPath> [outDir] [timeoutMs]

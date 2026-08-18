@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////////////////..........] 68.75%
-Tasks: 11/16
+Progresso: [////////////////////////........] 75%
+Tasks: 12/16
 
 Atualização
 
@@ -476,7 +476,7 @@ concluída
 
 Testes de tenant, escala e isolamento
 
-pendente
+concluída
 
 13
 
