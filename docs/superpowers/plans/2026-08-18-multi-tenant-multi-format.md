@@ -371,8 +371,8 @@ plano ainda antigo
 
 6. Quadro de progresso
 
-Progresso: [//..............................] 6.25%
-Tasks: 1/16
+Progresso: [////............................] 12.5%
+Tasks: 2/16
 
 #
 
@@ -396,7 +396,7 @@ concluída
 
 FORMAT_DIMS e geometria variável
 
-pendente
+concluída
 
 3
 

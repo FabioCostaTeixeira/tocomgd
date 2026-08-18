@@ -1,7 +1,11 @@
 (() => {
   "use strict";
 
-  const SIZE = 1080;
+  const FORMAT_DIMS = {
+    quadrado: { width: 1080, height: 1080 },
+    feed: { width: 1080, height: 1350 },
+    story: { width: 1080, height: 1920 },
+  };
   const MAX_WORK_SIDE = 2800;
   const MAX_FALLBACK_PIXELS = 16_000_000;
   const MAX_FALLBACK_SIDE = 4096;
@@ -60,7 +64,9 @@
   let resultUrl = null;
   let isBusy = false;
   let baseScale = 1;
-  let person = { x: SIZE / 2, y: SIZE / 2, scale: 1, rotation: 0 };
+  let currentFormat = "quadrado";
+  let dims = FORMAT_DIMS[currentFormat];
+  let person = { x: dims.width / 2, y: dims.height / 2, scale: 1, rotation: 0 };
   let editorStateVersion = 0;
   let toastTimer = null;
 
@@ -88,10 +94,11 @@
       personH * person.scale,
       person.rotation
     );
-    const minVisible = SIZE * 0.16;
+    const minVisibleX = dims.width * 0.16;
+    const minVisibleY = dims.height * 0.16;
 
-    person.x = clamp(person.x, minVisible - width / 2, SIZE - minVisible + width / 2);
-    person.y = clamp(person.y, minVisible - height / 2, SIZE - minVisible + height / 2);
+    person.x = clamp(person.x, minVisibleX - width / 2, dims.width - minVisibleX + width / 2);
+    person.y = clamp(person.y, minVisibleY - height / 2, dims.height - minVisibleY + height / 2);
   }
 
   function showToast(message, type = "info") {
@@ -135,6 +142,32 @@
     return true;
   }
 
+  function setFormat(formatId) {
+    if (!FORMAT_DIMS[formatId]) return;
+
+    currentFormat = formatId;
+    dims = FORMAT_DIMS[formatId];
+
+    canvas.width = dims.width;
+    canvas.height = dims.height;
+    canvasWrap.style.setProperty("--canvas-aspect", `${dims.width} / ${dims.height}`);
+
+    invalidateResult();
+
+    if (personImage) {
+      person.rotation = 0;
+      autoFitPerson();
+    } else {
+      person = {
+        x: dims.width / 2,
+        y: dims.height / 2,
+        scale: 1,
+        rotation: 0,
+      };
+      draw();
+    }
+  }
+
   function setBusy(busy, title = "Processando…", text = "") {
     isBusy = busy;
     processingTitle.textContent = title;
@@ -158,7 +191,7 @@
   function draw() {
     ctx.save();
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillRect(0, 0, dims.width, dims.height);
 
     if (personImage) {
       const width = personW * person.scale;
@@ -172,7 +205,7 @@
 
     const mask = currentMaskImage();
     if (mask && maskReady[selectedMask]) {
-      ctx.drawImage(mask, 0, 0, SIZE, SIZE);
+      ctx.drawImage(mask, 0, 0, dims.width, dims.height);
     }
 
     ctx.restore();
@@ -202,12 +235,12 @@
     // person.rotation NÃO é tocado aqui de propósito: "Centralizar" reposiciona
     // e reenquadra, mas a rotação foi escolha deliberada do usuário e não deve
     // ser desfeita por esse botão.
-    const scaleByWidth = (SIZE * 0.90) / personW;
-    const scaleByHeight = (SIZE * 0.94) / personH;
+    const scaleByWidth = (dims.width * 0.90) / personW;
+    const scaleByHeight = (dims.height * 0.94) / personH;
     baseScale = Math.min(scaleByWidth, scaleByHeight);
 
     person.scale = baseScale;
-    person.x = SIZE / 2;
+    person.x = dims.width / 2;
 
     const renderedHeight = bboxGirado(
       personW * person.scale,
@@ -215,7 +248,7 @@
       person.rotation
     ).h;
     const bottomMargin = 18;
-    person.y = SIZE - bottomMargin - renderedHeight / 2;
+    person.y = dims.height - bottomMargin - renderedHeight / 2;
 
     clampPerson();
     updateZoomUI();
@@ -226,8 +259,8 @@
   function pointInCanvas(event) {
     const rect = canvas.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / rect.width) * SIZE,
-      y: ((event.clientY - rect.top) / rect.height) * SIZE,
+      x: ((event.clientX - rect.left) / rect.width) * dims.width,
+      y: ((event.clientY - rect.top) / rect.height) * dims.height,
     };
   }
 
@@ -995,5 +1028,5 @@
   });
 
   applyMaskAccent();
-  draw();
+  setFormat(currentFormat);
 })();
