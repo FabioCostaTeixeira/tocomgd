@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////////..................] 43.75%
-Tasks: 7/16
+Progresso: [////////////////................] 50%
+Tasks: 8/16
 
 Atualização
 
@@ -444,7 +444,7 @@ concluída
 
 Servidor SPA local seguro
 
-pendente
+concluída
 
 9
 
