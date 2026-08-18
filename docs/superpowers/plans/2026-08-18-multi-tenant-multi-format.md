@@ -371,8 +371,8 @@ plano ainda antigo
 
 6. Quadro de progresso
 
-Progresso: [//////..........................] 18.75%
-Tasks: 3/16
+Progresso: [////////........................] 25%
+Tasks: 4/16
 
 #
 
@@ -412,7 +412,7 @@ concluída
 
 Exportação multi-formato
 
-pendente
+concluída
 
 5
 

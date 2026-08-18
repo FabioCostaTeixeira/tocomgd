@@ -32,6 +32,7 @@
   const resetButton = document.getElementById("resetButton");
   const rotateButton = document.getElementById("rotateButton");
   const downloadButton = document.getElementById("downloadButton");
+  const downloadLabel = document.getElementById("downloadLabel");
   const resultCard = document.getElementById("resultCard");
   const resultImage = document.getElementById("resultImage");
   const resultHint = document.getElementById("resultHint");
@@ -64,6 +65,7 @@
 
   let selectedMask =
     document.querySelector(".template-radio:checked")?.value || "rosa";
+  const tenantSlug = "cliente";
   let personImage = null;
   let personW = 0;
   let personH = 0;
@@ -175,6 +177,11 @@
     }
 
     syncFormatChips();
+    syncDownloadLabel();
+  }
+
+  function syncDownloadLabel() {
+    downloadLabel.textContent = `Baixar imagem ${dims.width}×${dims.height}`;
   }
 
   function syncFormatChips() {
@@ -1016,7 +1023,7 @@
   downloadButton.addEventListener("click", async () => {
     if (!personImage || isBusy) return;
 
-    setBusy(true, "Gerando a arte…", "Preparando o PNG em 1080×1080.");
+    setBusy(true, "Gerando a arte…", `Preparando o PNG em ${dims.width}×${dims.height}.`);
 
     try {
       const exportStateVersion = editorStateVersion;
@@ -1032,7 +1039,7 @@
 
       const link = document.createElement("a");
       link.href = resultUrl;
-      link.download = `arte-campanha-${selectedMask}-1080x1080.png`;
+      link.download = `avatar-${tenantSlug}-${selectedMask}-${currentFormat}-${dims.width}x${dims.height}.png`;
       if (!isIOS()) {
         document.body.appendChild(link);
         link.click();
