@@ -1,10 +1,5 @@
+import { readSlug, loadTenant, TenantError } from "./tenant.js";
 import { initEditor } from "./editor.js";
-
-const {
-  TenantError,
-  readSlug,
-  loadTenant,
-} = window.AvatarTenant;
 
 const appLoading = document.getElementById("appLoading");
 const appShell = document.getElementById("appShell");

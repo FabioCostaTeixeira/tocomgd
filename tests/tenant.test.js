@@ -4,16 +4,29 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { pathToFileURL } = require("node:url");
 
-const {
-  TenantError,
-  FORMAT_IDS,
-  RESERVED_SLUGS,
-  readSlug,
-  resolveAssetPath,
-  validateConfig,
-  loadTenant,
-} = require("../public/static/js/tenant.js");
+let TenantError;
+let FORMAT_IDS;
+let RESERVED_SLUGS;
+let readSlug;
+let resolveAssetPath;
+let validateConfig;
+let loadTenant;
+
+test.before(async () => {
+  ({
+    TenantError,
+    FORMAT_IDS,
+    RESERVED_SLUGS,
+    readSlug,
+    resolveAssetPath,
+    validateConfig,
+    loadTenant,
+  } = await import(
+    pathToFileURL(path.join(__dirname, "..", "public", "static", "js", "tenant.js")).href
+  ));
+});
 
 function assertTenantError(callback, code) {
   assert.throws(callback, (error) => {

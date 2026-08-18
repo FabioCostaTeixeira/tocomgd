@@ -1,17 +1,7 @@
-(function (root, factory) {
-  "use strict";
+"use strict";
 
-  const api = factory();
-  if (typeof module === "object" && module.exports) {
-    module.exports = api;
-  } else {
-    root.AvatarTenant = api;
-  }
-})(typeof globalThis !== "undefined" ? globalThis : this, () => {
-  "use strict";
-
-  const FORMAT_IDS = Object.freeze(["quadrado", "feed", "story"]);
-  const RESERVED_SLUGS = new Set([
+  export const FORMAT_IDS = Object.freeze(["quadrado", "feed", "story"]);
+  export const RESERVED_SLUGS = new Set([
     "admin",
     "api",
     "assets",
@@ -21,7 +11,7 @@
   ]);
   const SLUG_PATTERN = /^[a-z0-9-]+$/;
 
-  class TenantError extends Error {
+  export class TenantError extends Error {
     constructor(code, message) {
       super(message);
       this.name = "TenantError";
@@ -29,7 +19,7 @@
     }
   }
 
-  function readSlug(pathname) {
+  export function readSlug(pathname) {
     if (typeof pathname !== "string" || !pathname.startsWith("/")) {
       throw new TenantError("slug_invalido", "Caminho de tenant inválido.");
     }
@@ -47,7 +37,7 @@
     return slug;
   }
 
-  function resolveAssetPath(slug, assetPath, version) {
+  export function resolveAssetPath(slug, assetPath, version) {
     if (typeof assetPath !== "string" || assetPath.length === 0) {
       throw new TenantError("asset_invalido", "Asset vazio.");
     }
@@ -116,7 +106,7 @@
     return slug;
   }
 
-  function validateConfig(raw, slug) {
+  export function validateConfig(raw, slug) {
     if (!isRecord(raw)) {
       throw new TenantError("config_invalida", "Configuração de tenant inválida.");
     }
@@ -252,7 +242,7 @@
     };
   }
 
-  async function loadTenant(slug, fetchImpl = fetch) {
+  export async function loadTenant(slug, fetchImpl = fetch) {
     const url = `/static/tenants/${slug}/config.json`;
 
     let response;
@@ -278,14 +268,3 @@
 
     return validateConfig(raw, slug);
   }
-
-  return {
-    TenantError,
-    FORMAT_IDS,
-    RESERVED_SLUGS,
-    readSlug,
-    resolveAssetPath,
-    validateConfig,
-    loadTenant,
-  };
-});
