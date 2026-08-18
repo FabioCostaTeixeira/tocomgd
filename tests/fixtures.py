@@ -11,6 +11,12 @@ from PIL import Image, ImageDraw
 
 OUT = Path(__file__).parent / "fixtures"
 OUT.mkdir(exist_ok=True)
+MASK_OUT = OUT / "masks"
+MASK_DIMS = {
+    "quadrado": (1080, 1080),
+    "feed": (1080, 1350),
+    "story": (1080, 1920),
+}
 
 # canto -> cor. Escolhidas bem separadas em RGB para sobreviver ao JPEG.
 CANTOS = {
@@ -42,6 +48,41 @@ def padrao(w: int, h: int) -> Image.Image:
     d.rectangle([m, h - m - lado, m + lado, h - m], fill=CANTOS["BL"])
     d.rectangle([w - m - lado, h - m - lado, w - m, h - m], fill=CANTOS["BR"])
     return img
+
+
+def gerar_mascaras() -> None:
+    """Gera molduras RGBA determinísticas para cada formato oficial."""
+    MASK_OUT.mkdir(exist_ok=True)
+
+    for format_id, (width, height) in MASK_DIMS.items():
+        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        edge = max(24, min(width, height) // 24)
+        top = max(96, height // 12)
+        bottom = max(72, height // 16)
+
+        draw.rectangle([0, 0, width, top], fill=(245, 76, 154, 230))
+        draw.rectangle([0, height - bottom, width, height], fill=(37, 88, 255, 230))
+        draw.rectangle([0, 0, edge, height], fill=(22, 36, 78, 230))
+        draw.rectangle([width - edge, 0, width, height], fill=(22, 36, 78, 230))
+
+        # Different corner geometry prevents horizontal/vertical flips from
+        # looking valid while keeping the canvas center transparent.
+        accent = max(64, min(width, height) // 7)
+        draw.polygon(
+            [(edge, top), (edge + accent, top), (edge, top + accent)],
+            fill=(255, 214, 64, 255),
+        )
+        draw.polygon(
+            [
+                (width - edge, height - bottom),
+                (width - edge - accent, height - bottom),
+                (width - edge, height - bottom - accent),
+            ],
+            fill=(0, 196, 150, 255),
+        )
+
+        image.save(MASK_OUT / f"{format_id}.png", format="PNG")
 
 
 def exif_com_orientacao(orientation: int) -> Image.Exif:
@@ -80,6 +121,7 @@ def gerar_pesada(destino: Path, alvo_min: int, alvo_max: int) -> int:
 
 
 def main() -> None:
+    gerar_mascaras()
     padrao(4000, 3000).save(OUT / "12mp.jpg", quality=88)
     padrao(8000, 6000).save(OUT / "48mp.jpg", quality=85)
 
@@ -101,6 +143,8 @@ def main() -> None:
     assert 14 * MB <= tam < 15 * MB, f"pesada.jpg ficou com {tam} bytes"
 
     for f in sorted(OUT.iterdir()):
+        if not f.is_file():
+            continue
         print(f"  {f.name:20} {f.stat().st_size / 1024:9.0f} KB")
 
 

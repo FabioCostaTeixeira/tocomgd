@@ -371,8 +371,8 @@ plano ainda antigo
 
 6. Quadro de progresso
 
-Progresso: [................................] 0%
-Tasks: 0/16
+Progresso: [//..............................] 6.25%
+Tasks: 1/16
 
 #
 
@@ -388,7 +388,7 @@ Status
 
 Fixtures multi-formato
 
-pendente
+concluída
 
 2
 
