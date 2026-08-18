@@ -1,0 +1,37 @@
+{
+  "slug": "sandra-freitas",
+  "version": "1",
+  "brand": {
+    "name": "Sandra Freitas",
+    "title": "Monte sua foto com a Sandra Freitas!",
+    "description": "Escolha um modelo e personalize sua foto de campanha.",
+    "primaryColor": "#04235C",
+    "secondaryColor": "#F8027D",
+    "logo": "logo.png"
+  },
+  "formats": ["quadrado", "feed", "story"],
+  "templates": [
+    {
+      "id": "completo",
+      "name": "Modelo Completo",
+      "assets": {
+        "quadrado": "masks/completo/quadrado.png",
+        "feed": "masks/completo/feed.png",
+        "story": "masks/completo/story.png"
+      }
+    },
+    {
+      "id": "resumido",
+      "name": "Modelo Resumido",
+      "assets": {
+        "quadrado": "masks/resumido/quadrado.png",
+        "feed": "masks/resumido/feed.png",
+        "story": "masks/resumido/story.png"
+      }
+    }
+  ],
+  "defaults": {
+    "template": "completo",
+    "format": "quadrado"
+  }
+}

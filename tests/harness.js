@@ -657,6 +657,7 @@ async function runCase({
   url,
   photoPath,
   format = "quadrado",
+  template = null,
   viewport,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   headless = true,
@@ -714,6 +715,7 @@ async function runCase({
     await withTimeout(loadEventFired, timeoutMs, `carregamento de ${url}`);
 
     await selectFormat(cdp, format, timeoutMs);
+    if (template) await selectTemplate(cdp, template, timeoutMs);
     await selectPhotoFile(cdp, absPhotoPath);
 
     await waitForCondition(
