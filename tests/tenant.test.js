@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -115,6 +117,27 @@ test("validateConfig normaliza defaults de brand e resolve assets após validar 
     tenant.templates[0].assets.story,
     "/static/tenants/joao/masks/principal/story.png?v=7"
   );
+});
+
+test("validateConfig aceita uma cópia mínima do _template após trocar o slug", () => {
+  const templatePath = path.join(
+    __dirname,
+    "..",
+    "public",
+    "static",
+    "tenants",
+    "_template",
+    "config.json"
+  );
+  const copiedConfig = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+  copiedConfig.slug = "novo-cliente";
+
+  const tenant = validateConfig(copiedConfig, "novo-cliente");
+
+  assert.equal(tenant.slug, "novo-cliente");
+  assert.equal(tenant.brand.description, "");
+  assert.equal(tenant.templates.length, 1);
+  assert.deepEqual(tenant.formats, ["quadrado", "feed", "story"]);
 });
 
 test("validateConfig aceita cores HEX de 3, 4, 6 e 8 dígitos", () => {

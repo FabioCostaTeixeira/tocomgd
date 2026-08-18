@@ -137,7 +137,9 @@
       : requireString(raw.brand.title, "config_invalida", "Título do tenant inválido.");
     const description = raw.brand.description === undefined
       ? ""
-      : requireString(raw.brand.description, "config_invalida", "Descrição do tenant inválida.");
+      : typeof raw.brand.description === "string"
+        ? raw.brand.description
+        : requireString(raw.brand.description, "config_invalida", "Descrição do tenant inválida.");
     const secondaryColor = raw.brand.secondaryColor === undefined
       ? primaryColor
       : requireColor(raw.brand.secondaryColor, "secondaryColor");
