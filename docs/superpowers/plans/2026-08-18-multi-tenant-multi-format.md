@@ -1,1295 +1,1257 @@
-# Multi-tenant + Multi-formato — Plano de Implementação
+Multi-tenant + Multi-formato — Plano de Implementação Definitivo
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Data: 2026-08-18
+Projeto: Avatar
+Fonte de verdade da implementação: este arquivo
+Spec de design: docs/superpowers/specs/2026-08-18-multi-tenant-multi-format-design.md
 
-**Goal:** Um único deploy atende múltiplos clientes por slug de URL, com identidade e templates próprios, sobre um core de editor genérico que exporta em três formatos oficiais.
+Este plano deve ser executado task por task. Codex, Claude Code ou qualquer outro agente deve ler as Global Constraints, a task atual e suas dependências antes de alterar código. Não regenerar o roadmap em cada task.
 
-**Architecture:** O core (`editor.js`) deixa de conhecer cliente, template ou dimensão fixa: recebe tudo por `initEditor()`. Um módulo `tenant.js` resolve o slug da URL, carrega e valida `config.json`, e um `bootstrap.js` aplica marca, renderiza templates/formatos e inicializa o editor. Sem backend, sem banco, sem build step.
+1. Objetivo
 
-**Tech Stack:** HTML/CSS/JS puro (ES modules), Canvas 2D, Node 18+ para testes (CDP sobre Chrome headless), Python 3 + Pillow para fixtures e comparação pixel-perfect, Cloudflare Workers Static Assets para hospedagem.
+Permitir que um único código e um único deploy atendam múltiplos clientes por slug:
 
-**Spec:** `docs/superpowers/specs/2026-08-18-multi-tenant-multi-format-design.md`
+avatar.app.br/gd
+avatar.app.br/joao
+avatar.app.br/pablo
 
-## Global Constraints
+Cada tenant possui identidade, textos, templates e formatos habilitados próprios.
 
-- Formatos são enum fechado do core: `quadrado` 1080×1080, `feed` 1080×1350, `story` 1080×1920. Tenant só habilita, nunca define dimensão.
-- O core nunca pode conter `'gd'`, `'rosa'`, `'azul'` ou qualquer nome de cliente/template hardcoded.
-- Template e formato são conceitos distintos. `quadrado`/`feed`/`story` nunca são templates.
-- Trocar template preserva `x`, `y`, `scale`, `rotation`. Trocar formato executa reset + `autoFit`, sempre.
-- Não existe `transformByFormat`. Decisão consciente (spec §11).
-- `templates[]` é a whitelist de publicação. Sem campo `enabled`. Mínimo 1, máximo recomendado 20.
-- Configuração parcial é proibida: todo template deve ter asset para todo formato habilitado.
-- Fail closed: qualquer erro de slug, config ou asset obrigatório impede a inicialização do editor.
-- Assets sempre relativos ao tenant. Proibido `../`, caminho absoluto e URL externa.
-- `config.json` é público. Nunca conterá segredo, token ou credencial.
-- Nenhuma configuração de tenant pode executar código (`eval`, `Function()`, import dinâmico).
-- `config.json` é carregado sem query string; `version` só é lido depois. Assets recebem `?v={version}`.
-- Preview e export usam a mesma matemática. WYSIWYG pixel-perfect é inegociável.
-- Não introduzir framework, bundler, build step, backend, banco ou autenticação.
-- Não alterar a lógica já validada de EXIF, rotação e race condition sem necessidade.
+Todos compartilham o mesmo core do editor:
 
-## Regra global de progresso
+importação e normalização de imagem;
 
-Vale para qualquer agente que execute este plano, incluindo Codex e Claude Code.
+EXIF;
 
-**Fonte de verdade:** este arquivo. Antes de atualizar, ler o estado existente. Não manter contagem paralela.
+movimento;
 
-**Cálculo:** exclusivamente por tasks concluídas.
+zoom;
 
-```text
+rotação;
+
+enquadramento;
+
+Canvas;
+
+preview;
+
+exportação PNG;
+
+invalidação de resultado;
+
+proteção contra race conditions.
+
+O produto suporta somente estes formatos oficiais:
+
+ID
+
+Dimensão
+
+Proporção
+
+quadrado
+
+1080×1080
+
+1:1
+
+feed
+
+1080×1350
+
+4:5
+
+story
+
+1080×1920
+
+9:16
+
+Tenant habilita um subset. Tenant nunca define novas dimensões.
+
+2. Arquitetura alvo
+
+URL
+│
+├── /
+│   └── landing comercial
+│
+└── /{slug}
+    │
+    ├── tenant.js
+    │   ├── valida slug
+    │   ├── carrega config
+    │   ├── valida contrato
+    │   └── resolve assets
+    │
+    └── bootstrap.js
+        ├── aplica brand
+        ├── inicia UI
+        └── initEditor()
+             │
+             ├── templates[]
+             ├── formats[]
+             ├── FORMAT_DIMS
+             ├── EXIF
+             ├── zoom/rotação
+             ├── Canvas
+             └── PNG
+
+Regra de ouro
+
+O core não conhece nenhum cliente.
+
+gd é apenas um tenant comum.
+
+Logo, editor.js não pode conhecer:
+
+gd
+joao
+pablo
+rosa
+azul
+qualquer outro cliente ou template
+
+Adicionar cliente, template ou asset não pode exigir alteração do core.
+
+3. Global Constraints
+
+Estas regras valem para todas as tasks.
+
+3.1 Core
+
+FORMAT_DIMS é o único dono das dimensões oficiais.
+
+Nenhuma fórmula pode assumir canvas quadrado.
+
+Template e formato são conceitos diferentes.
+
+templates[] é a whitelist de publicação.
+
+Mínimo de 1 template por tenant.
+
+Máximo operacional recomendado: 20 templates.
+
+Não criar enabled.
+
+Não criar transformByFormat.
+
+Troca de template preserva x, y, scale, rotation.
+
+Troca de formato executa reset + autoFit.
+
+Preview e export usam a mesma matemática.
+
+WYSIWYG pixel-perfect permanece obrigatório.
+
+3.2 Compatibilidade
+
+Não alterar sem necessidade a lógica já validada de:
+
+EXIF;
+
+normalização de orientação;
+
+rotação;
+
+pinch/gestos;
+
+zoom;
+
+export com canvas.toBlob();
+
+state/version invalidation;
+
+race condition de exportação.
+
+3.3 Tenant
+
+slug: ^[a-z0-9-]+$;
+
+reservados: admin, api, assets, static, tenants, login;
+
+template id: ^[a-z0-9-]+$;
+
+formatos não podem se repetir;
+
+template ids não podem se repetir;
+
+todo template deve possuir asset para cada formato habilitado;
+
+defaults precisam existir;
+
+config.json é dado público;
+
+nenhum segredo pode existir em config;
+
+config nunca pode executar código.
+
+3.4 Assets
+
+Asset declarado pelo tenant:
+
+deve ser relativo;
+
+não pode começar com /;
+
+não pode conter \;
+
+não pode conter ?, #, % ou :;
+
+não pode conter segmentos . ou ..;
+
+não pode ser URL externa;
+
+deve ser montado internamente como /static/tenants/{slug}/{asset}?v={version}.
+
+Não usar eval, Function, script em config ou import dinâmico dirigido pelo tenant.
+
+3.5 Runtime e deploy
+
+sem backend;
+
+sem banco;
+
+sem autenticação;
+
+sem framework;
+
+sem bundler;
+
+sem build step;
+
+hospedagem alvo: Cloudflare Workers Static Assets;
+
+nenhum deploy real nesta entrega.
+
+3.6 Política de falha
+
+Build/release: todos os assets declarados por tenants reais precisam existir. O validator/gate final bloqueia a entrega se faltar arquivo.
+
+Runtime:
+
+config inválido → editor não inicia;
+
+slug inválido/reservado → editor não inicia;
+
+máscara default ausente → editor não inicia;
+
+asset não-default que falhar durante seleção → seleção falha de forma controlada; download permanece bloqueado até existir uma máscara válida;
+
+logo é opcional e não derruba o editor.
+
+Essa distinção preserva fail-closed sem obrigar 60 downloads/HEAD requests no boot de um tenant com muitos templates.
+
+4. Invariante de executabilidade
+
+Obrigatória para o plano inteiro:
+
+Ao final de cada task, o projeto deve continuar executável e testável.
+
+Antes de cada commit:
+
+toda dependência usada já precisa existir;
+
+nenhuma importação pode apontar para arquivo futuro;
+
+nenhuma rota pode depender de configuração futura;
+
+implementação nova entra antes da antiga ser removida;
+
+qualquer “virada” que não possa ser dividida com segurança deve ser uma única task atômica;
+
+os testes previstos da task precisam passar.
+
+Nunca criar a sequência:
+
+Task A começa a usar X
+...
+Task F cria X
+
+Sempre:
+
+Task A cria X
+Task B valida X
+Task C passa a usar X
+
+4.1. Implementation Lock
+
+O plano continua orientado por contrato para economizar tokens, mas decisões cuja rederivação poderia gerar implementações diferentes entre Codex e Claude Code devem conter um bloco Implementation Lock.
+
+Um Implementation Lock:
+
+fixa a sequência semântica obrigatória;
+
+pode usar pseudocódigo ou código canônico curto;
+
+não precisa ser copiado literalmente se o código existente exigir adaptação;
+
+não pode ter ordem/comportamento alterado sem atualizar a spec/plano;
+
+existe apenas nos pontos arquiteturalmente sensíveis.
+
+Tasks com Implementation Lock:
+
+Task 2  — setFormat / geometria
+Task 6  — resolveAssetPath
+Task 7  — validateConfig / loadTenant
+Task 8  — containment do servidor
+Task 10 — bootstrap / initEditor / loading / race de máscara
+Task 11 — regras de troca e sincronização de testes
+
+O restante permanece diretivo para reduzir contexto e consumo de tokens.
+
+5. Regra global de progresso
+
+Vale para Codex, Claude Code ou qualquer agente.
+
+Fonte de verdade
+
+Este arquivo.
+
+Antes de trabalhar:
+
+ler o quadro de progresso;
+
+identificar a primeira task pendente cujas dependências estejam concluídas;
+
+não manter contagem paralela em conversa/memória.
+
+Cálculo
+
 progresso = tasks_concluidas / total_tasks * 100
-```
 
-Nunca usar estimativa subjetiva.
+O plano possui 16 tasks.
 
-**Barra:** 10 posições, cada uma valendo 10%. Concluída `//`, pendente `..`.
+A barra possui 16 posições, uma por task.
 
-**Quando atualizar:** somente quando (1) uma task for concluída, (2) uma task concluída voltar a pendente por falha ou revisão, (3) o plano ganhar ou perder tasks, (4) houver mudança real no total de trabalho. Nunca durante passos internos da mesma task.
+concluída: //
 
-**Uma task só conta como concluída** depois de atender seus critérios de aceite e passar nos testes previstos. Task parcialmente executada continua pendente.
+pendente: ..
 
-**Ao concluir uma task,** atualizar o quadro abaixo e exibir no final da resposta apenas:
+Assim não há arredondamento visual subjetivo.
 
-```text
+Exemplo 4/16:
+
+Progresso: [////////........................] 25%
+Tasks: 4/16
+
+Atualização
+
+Atualizar somente quando:
+
+uma task concluir;
+
+uma task concluída voltar a pendente;
+
+o número total de tasks mudar.
+
+Uma task só fica concluída depois dos testes e critérios de aceite.
+
+Resposta do agente ao concluir
+
+Máximo 3 linhas:
+
 ✓ Task X concluída
-Progresso: [////////////........] 60%
-Tasks: 12/20
-```
+Progresso: [////////........................] 25%
+Tasks: 4/16
 
-Máximo 3 linhas. Não narrar percentual durante a execução, não repetir lista de tasks concluídas, não regerar roadmap para informar progresso.
+Não repetir roadmap.
 
-## Quadro de progresso
+Persistência obrigatória
 
-```text
-Progresso: [....................] 0%
+A marcação da task e a barra devem ser alteradas antes do commit.
+
+O arquivo deste plano deve entrar no mesmo commit da task.
+
+Nunca:
+
+código commitado
+plano ainda antigo
+
+6. Quadro de progresso
+
+Progresso: [................................] 0%
 Tasks: 0/16
-```
 
-| # | Fase | Task | Status |
-|---|------|------|--------|
-| 1 | 0 | Fixtures multi-formato | pendente |
-| 2 | 1 | FORMAT_DIMS e geometria variável | pendente |
-| 3 | 1 | Seletor de formato e preview responsivo | pendente |
-| 4 | 1 | Exportação multi-formato | pendente |
-| 5 | 1 | Matriz de teste multi-formato | pendente |
-| 6 | 3 | tenant.js — slug e resolução de assets | pendente |
-| 7 | 3 | tenant.js — validação de schema | pendente |
-| 8 | 3 | Servidor de desenvolvimento com SPA fallback | pendente |
-| 9 | 3 | Tenants gd, joao e _template | pendente |
-| 10 | 2+3 | Virada: initEditor, templates dinâmicos e bootstrap | pendente |
-| 11 | 2 | Regra de preservação de enquadramento | pendente |
-| 12 | 3 | Raiz do domínio | pendente |
-| 13 | 4 | Testes de tenant e isolamento | pendente |
-| 14 | 4 | Verificador de migração | pendente |
-| 15 | 5 | Cloudflare Workers Static Assets | pendente |
-| 16 | 6 | README | pendente |
+#
 
-**Nota de ordenação:** a Fase 3 (infraestrutura de tenant) vem antes da Fase 2 (templates dinâmicos) de propósito. `tenant.js`, o servidor com SPA fallback e os arquivos de tenant são independentes do core e precisam existir antes da virada, senão o `index.html` passaria várias tasks apontando para um `bootstrap.js` inexistente e o app ficaria inexecutável no meio do plano. A Task 10 é a única virada e é atômica por necessidade: separar HTML, `initEditor` e `bootstrap` deixaria o produto quebrado entre commits.
+Fase
 
----
+Task
 
-## Estrutura de arquivos
+Status
 
-**Criados**
+1
 
-| Arquivo | Responsabilidade |
-|---|---|
-| `static/js/tenant.js` | Slug, fetch, validação de contrato, resolução de caminho de asset. Sem DOM. |
-| `static/js/bootstrap.js` | Orquestra: slug → tenant → marca → templates/formatos → `initEditor`. Único dono da tela de erro. |
-| `tests/server.js` | Servidor estático local com SPA fallback, para testar `/gd` e `/joao`. |
-| `tests/tenant.test.js` | Testes unitários em Node das funções puras de `tenant.js`. |
-| `static/tenants/{_template,gd,joao}/config.json` + assets | Configuração por cliente. |
-| `public/_headers` | CSP, cache do `config.json`, headers de segurança. |
-| `wrangler.toml` | Configuração Workers Static Assets. |
+0
 
-**Modificados**
+Fixtures multi-formato
 
-| Arquivo | Mudança |
-|---|---|
-| `static/js/editor.js` | Deixa de ser IIFE auto-executável e passa a exportar `initEditor()`. Dimensões variáveis, templates dinâmicos. |
-| `index.html` | Remove radios e `<img>` de máscara fixos. Ganha containers vazios, tela de erro e landing. |
-| `static/css/style.css` | `aspect-ratio` via variável, limite de altura para story, cores via variáveis de marca. |
-| `tests/fixtures.py` | Gera molduras sintéticas por formato. |
-| `tests/harness.js` | `runCase()` aceita `format`; novo `inspectTenant()`. |
-| `tests/run.js` | Matriz 13+3+3, race em formato não quadrado, casos de tenant. |
-| `tests/compare.py` | Modo `--centro` para comparar enquadramento. |
-| `tests/verify_migration.py` | Verificação por string delimitada. |
-| `README.md` | Arquitetura, onboarding de cliente, deploy. |
+pendente
 
----
+2
 
-# FASE 0 — Fixtures
+1
 
-### Task 1: Fixtures multi-formato
+FORMAT_DIMS e geometria variável
 
-Molduras sintéticas de teste para que o desenvolvimento do core não dependa das artes definitivas do designer.
+pendente
 
-**Files:**
-- Modify: `tests/fixtures.py`
-- Create: `tests/test_fixtures_masks.py`
-- Create (gerados): `tests/fixtures/masks/{quadrado,feed,story}.png`
+3
 
-**Interfaces:**
-- Consumes: nada.
-- Produces: `gerar_mascaras()` grava três PNGs RGBA em `tests/fixtures/masks/`, um por formato, nomeados com o id do formato.
+1
 
-- [ ] **Step 1: Escrever o teste que falha**
+Seletor de formato e preview responsivo
 
-Criar `tests/test_fixtures_masks.py`:
+pendente
 
-```python
-from pathlib import Path
+4
 
-from PIL import Image
+1
 
-import fixtures
+Exportação multi-formato
 
-MASKS = Path(__file__).parent / "fixtures" / "masks"
-ESPERADO = {
-    "quadrado.png": (1080, 1080),
-    "feed.png": (1080, 1350),
-    "story.png": (1080, 1920),
+pendente
+
+5
+
+1
+
+Matriz WYSIWYG multi-formato
+
+pendente
+
+6
+
+2
+
+tenant.js — slug e assets seguros
+
+pendente
+
+7
+
+2
+
+tenant.js — schema e carga
+
+pendente
+
+8
+
+2
+
+Servidor SPA local seguro
+
+pendente
+
+9
+
+2
+
+Tenants de referência + validator
+
+pendente
+
+10
+
+3
+
+Virada atômica: initEditor + templates + bootstrap + landing
+
+pendente
+
+11
+
+3
+
+Comportamento de troca sem sleeps
+
+pendente
+
+12
+
+4
+
+Testes de tenant, escala e isolamento
+
+pendente
+
+13
+
+4
+
+Verificador de migração
+
+pendente
+
+14
+
+5
+
+Cloudflare Workers Static Assets + public/
+
+pendente
+
+15
+
+6
+
+README e onboarding
+
+pendente
+
+16
+
+7
+
+Gate final de entrega
+
+pendente
+
+7. Estrutura alvo
+
+Após a Task 14:
+
+project/
+├── public/
+│   ├── index.html
+│   ├── _headers
+│   └── static/
+│       ├── css/
+│       │   └── style.css
+│       ├── js/
+│       │   ├── editor.js
+│       │   ├── tenant.js
+│       │   └── bootstrap.js
+│       └── tenants/
+│           ├── _template/
+│           ├── gd/
+│           └── joao/
+│
+├── tests/
+│   ├── server.js
+│   ├── tenant.test.js
+│   ├── validate-tenant.js
+│   ├── verify_migration.py
+│   ├── harness.js
+│   ├── run.js
+│   ├── fixtures.py
+│   └── fixtures/
+│
+├── docs/
+├── wrangler.toml
+├── requirements-dev.txt
+└── README.md
+
+gd não possui qualquer posição especial nessa estrutura.
+
+FASE 0 — Base de teste
+
+Task 1 — Fixtures multi-formato
+
+Objetivo
+
+Permitir desenvolver e testar feed e story sem depender das artes reais de cliente.
+
+Dependências
+
+Nenhuma.
+
+Alterar
+
+tests/fixtures.py
+
+Criar
+
+tests/test_fixtures_masks.py
+
+tests/fixtures/masks/quadrado.png
+
+tests/fixtures/masks/feed.png
+
+tests/fixtures/masks/story.png
+
+Implementação
+
+Adicionar gerar_mascaras() com dimensões:
+
+quadrado 1080×1080
+feed     1080×1350
+story    1080×1920
+
+Cada fixture deve ter:
+
+RGBA;
+
+centro transparente;
+
+bordas/elementos assimétricos suficientes para detectar flip/crop incorreto.
+
+Testes
+
+Preferir unittest da stdlib para não adicionar pytest só por esta task:
+
+python -m unittest tests/test_fixtures_masks.py -v
+python tests/fixtures.py
+
+Validar:
+
+os 3 arquivos existem;
+
+dimensões corretas;
+
+modo RGBA;
+
+centro transparente.
+
+Não alterar
+
+editor.js;
+
+EXIF;
+
+export;
+
+tenant.
+
+Aceite
+
+Fixtures determinísticas e testes verdes.
+
+Commit
+
+test: fixtures sinteticas por formato
+
+FASE 1 — Core multi-formato
+
+Task 2 — FORMAT_DIMS e geometria variável
+
+Objetivo
+
+Eliminar a premissa global SIZE = 1080.
+
+Dependências
+
+Task 1.
+
+Alterar
+
+static/js/editor.js
+
+Produzir
+
+FORMAT_DIMS = {
+  quadrado: { width: 1080, height: 1080 },
+  feed: { width: 1080, height: 1350 },
+  story: { width: 1080, height: 1920 }
 }
 
+e estado:
 
-def test_gera_mascara_por_formato():
-    fixtures.gerar_mascaras()
+currentFormat
+dims
 
-    for nome, (largura, altura) in ESPERADO.items():
-        caminho = MASKS / nome
-        assert caminho.exists(), f"{nome} não foi gerado"
-        with Image.open(caminho) as img:
-            assert img.size == (largura, altura)
-            assert img.mode == "RGBA", "máscara precisa de canal alfa"
+Generalizar
 
+tamanho do canvas;
 
-def test_mascara_tem_centro_transparente():
-    """A moldura não pode cobrir o centro, senão a pessoa some do preview."""
-    fixtures.gerar_mascaras()
+centro inicial;
 
-    with Image.open(MASKS / "quadrado.png") as img:
-        assert img.getpixel((540, 540))[3] == 0
-```
+draw;
 
-- [ ] **Step 2: Rodar o teste e confirmar que falha**
+pointInCanvas;
 
-Run: `python -m pytest tests/test_fixtures_masks.py -v`
-Expected: FAIL com `AttributeError: module 'fixtures' has no attribute 'gerar_mascaras'`
+autoFit;
 
-- [ ] **Step 3: Implementar `gerar_mascaras()`**
+clamp;
 
-Acrescentar a `tests/fixtures.py`, antes do bloco `if __name__ == "__main__":`:
+bbox rotacionada;
 
-```python
-MASKS_OUT = OUT / "masks"
+limites baseados em width/height.
 
-# Formatos oficiais. Precisa espelhar FORMAT_DIMS de static/js/editor.js.
-FORMATOS = {
-    "quadrado": (1080, 1080),
-    "feed": (1080, 1350),
-    "story": (1080, 1920),
-}
+Regra de troca
 
+setFormat(formatId):
 
-def gerar_mascaras() -> None:
-    """Molduras sintéticas de teste, uma por formato.
+valida enum;
 
-    Borda opaca colorida + faixa inferior + centro transparente. A borda
-    prova que a máscara foi desenhada nas dimensões certas; a faixa dá
-    assimetria vertical, denunciando flip de eixo; o centro transparente
-    garante que a pessoa continua visível no preview.
-    """
-    MASKS_OUT.mkdir(parents=True, exist_ok=True)
+atualiza currentFormat/dims;
 
-    for nome, (w, h) in FORMATOS.items():
-        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
+atualiza canvas;
 
-        borda = max(8, min(w, h) // 40)
-        d.rectangle([0, 0, w - 1, h - 1], outline=(255, 90, 160, 255), width=borda)
+invalida resultado;
 
-        faixa = h // 12
-        d.rectangle([0, h - faixa, w, h], fill=(36, 88, 255, 255))
+zera rotação;
 
-        img.save(MASKS_OUT / f"{nome}.png")
-```
+executa autoFit se houver pessoa;
 
-E acrescentar a chamada dentro do `if __name__ == "__main__":` existente, junto das demais gerações:
+desenha.
 
-```python
-    gerar_mascaras()
-```
+Nesta fase ainda não mexer em tenant.
 
-- [ ] **Step 4: Rodar o teste e confirmar que passa**
+Implementation Lock
 
-Run: `python -m pytest tests/test_fixtures_masks.py -v`
-Expected: PASS, 2 testes
+A sequência semântica de setFormat() é obrigatória:
 
-- [ ] **Step 5: Gerar as fixtures e conferir no disco**
+function setFormat(formatId) {
+  if (!FORMAT_DIMS[formatId]) return;
 
-Run: `python tests/fixtures.py && python -c "import os;print(sorted(os.listdir('tests/fixtures/masks')))"`
-Expected: `['feed.png', 'quadrado.png', 'story.png']`
+  currentFormat = formatId;
+  dims = FORMAT_DIMS[formatId];
 
-- [ ] **Step 6: Commit**
+  canvas.width = dims.width;
+  canvas.height = dims.height;
+  canvasWrap.style.setProperty("--canvas-aspect", `${dims.width} / ${dims.height}`);
 
-```bash
-git add tests/fixtures.py tests/test_fixtures_masks.py tests/fixtures/masks
-git commit -m "test: molduras sinteticas por formato (fase 0)"
-```
+  invalidateResult();
 
----
-
-# FASE 1 — Core multi-formato
-
-### Task 2: FORMAT_DIMS e geometria variável
-
-Elimina a premissa de canvas quadrado. Nenhuma fórmula pode assumir `SIZE`.
-
-**Files:**
-- Modify: `static/js/editor.js:4` (constante `SIZE`), `:62` (estado inicial), `:83-95` (`clampPerson`), `:157-179` (`draw`), `:203-222` (`autoFitPerson`), `:227-232` (`pointInCanvas`)
-
-**Interfaces:**
-- Consumes: nada.
-- Produces: `FORMAT_DIMS` (objeto congelado com `quadrado`/`feed`/`story`, cada um `{width, height}`); `currentFormat` (string); `dims` (dimensões do formato ativo); `setFormat(formatId)` que troca o canvas e reenquadra.
-
-- [ ] **Step 1: Substituir `SIZE` pelas dimensões do formato**
-
-Em `static/js/editor.js`, trocar a linha 4:
-
-```js
-  const SIZE = 1080;
-```
-
-por:
-
-```js
-  // Formatos oficiais. Enum fechado: o tenant habilita, nunca define dimensão.
-  const FORMAT_DIMS = Object.freeze({
-    quadrado: Object.freeze({ width: 1080, height: 1080 }),
-    feed: Object.freeze({ width: 1080, height: 1350 }),
-    story: Object.freeze({ width: 1080, height: 1920 }),
-  });
-
-  let currentFormat = "quadrado";
-  let dims = FORMAT_DIMS[currentFormat];
-```
-
-- [ ] **Step 2: Corrigir o estado inicial da pessoa**
-
-Trocar a linha 62:
-
-```js
-  let person = { x: SIZE / 2, y: SIZE / 2, scale: 1, rotation: 0 };
-```
-
-por:
-
-```js
-  let person = { x: dims.width / 2, y: dims.height / 2, scale: 1, rotation: 0 };
-```
-
-- [ ] **Step 3: Corrigir `clampPerson()`**
-
-Substituir o corpo de `clampPerson()` por:
-
-```js
-  function clampPerson() {
-    if (!personImage) return;
-    const { w: width, h: height } = bboxGirado(
-      personW * person.scale,
-      personH * person.scale,
-      person.rotation
-    );
-    // Referência de "quanto precisa continuar visível" usa o menor lado:
-    // em story, 16% da altura seria uma margem grande demais na horizontal.
-    const minVisible = Math.min(dims.width, dims.height) * 0.16;
-
-    person.x = clamp(person.x, minVisible - width / 2, dims.width - minVisible + width / 2);
-    person.y = clamp(person.y, minVisible - height / 2, dims.height - minVisible + height / 2);
-  }
-```
-
-- [ ] **Step 4: Corrigir `draw()`**
-
-Em `draw()`, trocar `ctx.fillRect(0, 0, SIZE, SIZE);` por:
-
-```js
-    ctx.fillRect(0, 0, dims.width, dims.height);
-```
-
-e trocar `ctx.drawImage(mask, 0, 0, SIZE, SIZE);` por:
-
-```js
-      ctx.drawImage(mask, 0, 0, dims.width, dims.height);
-```
-
-- [ ] **Step 5: Corrigir `autoFitPerson()`**
-
-Substituir as linhas que usam `SIZE` dentro de `autoFitPerson()` por:
-
-```js
-    const scaleByWidth = (dims.width * 0.90) / personW;
-    const scaleByHeight = (dims.height * 0.94) / personH;
-    baseScale = Math.min(scaleByWidth, scaleByHeight);
-
-    person.scale = baseScale;
-    person.x = dims.width / 2;
-
-    const renderedHeight = bboxGirado(
-      personW * person.scale,
-      personH * person.scale,
-      person.rotation
-    ).h;
-    const bottomMargin = 18;
-    person.y = dims.height - bottomMargin - renderedHeight / 2;
-```
-
-- [ ] **Step 6: Corrigir `pointInCanvas()`**
-
-```js
-  function pointInCanvas(event) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * dims.width,
-      y: ((event.clientY - rect.top) / rect.height) * dims.height,
+  if (personImage) {
+    person.rotation = 0;
+    autoFitPerson();
+  } else {
+    person = {
+      x: dims.width / 2,
+      y: dims.height / 2,
+      scale: 1,
+      rotation: 0,
     };
-  }
-```
-
-- [ ] **Step 7: Adicionar `setFormat()`**
-
-Logo depois de `autoFitPerson()`, acrescentar:
-
-```js
-  // Trocar formato SEMPRE reseta o enquadramento. Coordenadas salvas em um
-  // aspect ratio não são válidas em outro; guardar e restaurar exigiria
-  // re-clamp de posição, de zoom e de bbox rotacionada. Decisão da spec §11.
-  function setFormat(formatId) {
-    if (!FORMAT_DIMS[formatId]) return;
-
-    currentFormat = formatId;
-    dims = FORMAT_DIMS[formatId];
-    canvas.width = dims.width;
-    canvas.height = dims.height;
-    canvasWrap.style.setProperty("--canvas-aspect", `${dims.width} / ${dims.height}`);
-
-    invalidateResult();
-    if (personImage) {
-      person.rotation = 0;
-      autoFitPerson();
-    } else {
-      person = { x: dims.width / 2, y: dims.height / 2, scale: 1, rotation: 0 };
-      draw();
-    }
-  }
-```
-
-- [ ] **Step 8: Confirmar que nenhum `SIZE` sobrou**
-
-Run: `grep -nE "\bSIZE\b" static/js/editor.js`
-Expected: nenhuma saída (`MAX_WORK_SIDE`, `MAX_FALLBACK_SIDE` e `MAX_FILE_BYTES` não casam com `\bSIZE\b`)
-
-- [ ] **Step 9: Rodar a suíte existente sem regressão**
-
-Run: `python -m http.server 8000 --directory . & sleep 1 && node tests/run.js http://127.0.0.1:8000/`
-Expected: 13 casos, todos com `0 pixels diferentes`
-
-- [ ] **Step 10: Commit**
-
-```bash
-git add static/js/editor.js
-git commit -m "feat: FORMAT_DIMS e geometria de canvas variavel"
-```
-
----
-
-### Task 3: Seletor de formato e preview responsivo
-
-**Files:**
-- Modify: `index.html` (nova seção de formato), `static/css/style.css:258` (`aspect-ratio`), `static/js/editor.js` (renderização dos chips)
-
-**Interfaces:**
-- Consumes: `setFormat(formatId)`, `currentFormat` da Task 2.
-- Produces: `renderFormats(formatIds)` popula `#formatGrid` com botões `.format-chip[data-format]`; `syncFormatChips()` mantém `aria-checked` coerente; variável CSS `--canvas-aspect` em `.canvas-wrap`.
-
-- [ ] **Step 1: Adicionar o container de formato ao HTML**
-
-Em `index.html`, logo após o `</section>` da `template-section`, inserir:
-
-```html
-    <section class="format-section" aria-labelledby="formatTitle">
-      <div class="section-heading">
-        <strong id="formatTitle">2. Escolha o formato</strong>
-        <span>A troca de formato reenquadra a foto</span>
-      </div>
-
-      <div class="format-grid" id="formatGrid" role="radiogroup" aria-label="Formatos de exportação"></div>
-    </section>
-```
-
-Renumerar o título seguinte: `2. Ajuste a foto` passa a `3. Ajuste a foto`.
-
-- [ ] **Step 2: Tornar o preview proporcional ao formato**
-
-Em `static/css/style.css`, na regra `.canvas-wrap` (linha 258), substituir:
-
-```css
-  width: 100%;
-  aspect-ratio: 1;
-```
-
-por:
-
-```css
-  width: 100%;
-  aspect-ratio: var(--canvas-aspect, 1 / 1);
-  /* Story é 9:16: sem teto de altura o canvas empurra os controles para
-     fora da dobra em telas baixas. Com aspect-ratio, limitar a altura faz
-     o navegador reduzir a largura — a resolução do canvas não muda, então
-     o WYSIWYG continua intacto. */
-  max-height: 68dvh;
-  margin-inline: auto;
-```
-
-E acrescentar, ao lado das regras de `.template-grid`:
-
-```css
-.format-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.format-chip {
-  border: 1px solid rgba(255, 255, 255, .14);
-  border-radius: 999px;
-  padding: 8px 16px;
-  font-size: 14px;
-  cursor: pointer;
-  background: transparent;
-  color: inherit;
-}
-
-.format-chip[aria-checked="true"] {
-  border-color: var(--brand-primary, #ff4fa3);
-  background: color-mix(in srgb, var(--brand-primary, #ff4fa3) 18%, transparent);
-}
-```
-
-- [ ] **Step 3: Renderizar os chips de formato**
-
-Em `static/js/editor.js`, junto das demais referências de elemento (perto da linha 38):
-
-```js
-  const formatGrid = document.getElementById("formatGrid");
-```
-
-E, próximo a `setFormat()`:
-
-```js
-  const FORMAT_LABELS = {
-    quadrado: "Quadrado",
-    feed: "Feed",
-    story: "Story",
-  };
-
-  function renderFormats(formatIds) {
-    formatGrid.replaceChildren();
-
-    formatIds.forEach((formatId) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "format-chip";
-      chip.dataset.format = formatId;
-      chip.setAttribute("role", "radio");
-      chip.setAttribute("aria-checked", String(formatId === currentFormat));
-      chip.textContent = FORMAT_LABELS[formatId] || formatId;
-
-      chip.addEventListener("click", () => {
-        if (isBusy || formatId === currentFormat) return;
-        setFormat(formatId);
-        syncFormatChips();
-        showToast(`Formato ${FORMAT_LABELS[formatId] || formatId} selecionado.`);
-      });
-
-      formatGrid.append(chip);
-    });
-  }
-
-  function syncFormatChips() {
-    [...formatGrid.querySelectorAll(".format-chip")].forEach((chip) => {
-      chip.setAttribute("aria-checked", String(chip.dataset.format === currentFormat));
-    });
-  }
-```
-
-- [ ] **Step 4: Chamar `renderFormats()` na inicialização provisória**
-
-O editor ainda é uma IIFE auto-executável; a chamada definitiva vem de `initEditor()` na Task 10. Por ora, no bloco final do arquivo, antes de `draw();`, acrescentar:
-
-```js
-  // Provisório: na Task 10 quem informa os formatos é o tenant.
-  renderFormats(Object.keys(FORMAT_DIMS));
-```
-
-- [ ] **Step 5: Verificar manualmente os três formatos**
-
-Run: subir o servidor local, abrir `http://127.0.0.1:8000/`, enviar `tests/fixtures/12mp.jpg`, clicar em cada chip.
-Expected: o preview muda de proporção, a foto é reenquadrada e o card de resultado some a cada troca.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add index.html static/css/style.css static/js/editor.js
-git commit -m "feat: seletor de formato e preview proporcional"
-```
-
----
-
-### Task 4: Exportação multi-formato
-
-**Files:**
-- Modify: `static/js/editor.js` (handler do `#downloadButton`, por volta da linha 946), `index.html` (rótulo do botão)
-
-**Interfaces:**
-- Consumes: `dims`, `currentFormat` da Task 2; `setFormat()` da Task 2.
-- Produces: PNG com exatamente as dimensões do formato ativo, nomeado `avatar-{tenant}-{template}-{format}-{w}x{h}.png`.
-
-- [ ] **Step 1: Declarar as variáveis de identificação provisórias**
-
-Perto do topo do arquivo, junto de `let selectedMask`, acrescentar:
-
-```js
-  // Provisório: na Task 10 estes dois valores passam a vir de initEditor().
-  let tenantSlug = "cliente";
-  let currentTemplateId = "modelo";
-```
-
-- [ ] **Step 2: Ajustar mensagem de progresso e nome do arquivo**
-
-No handler de `downloadButton`, trocar:
-
-```js
-    setBusy(true, "Gerando a arte…", "Preparando o PNG em 1080×1080.");
-```
-
-por:
-
-```js
-    setBusy(true, "Gerando a arte…", `Preparando o PNG em ${dims.width}×${dims.height}.`);
-```
-
-E trocar:
-
-```js
-      link.download = `arte-campanha-${selectedMask}-1080x1080.png`;
-```
-
-por:
-
-```js
-      link.download =
-        `avatar-${tenantSlug}-${currentTemplateId}-${currentFormat}` +
-        `-${dims.width}x${dims.height}.png`;
-```
-
-- [ ] **Step 3: Tornar o rótulo do botão dinâmico**
-
-Em `index.html`, trocar:
-
-```html
-        <span>Baixar imagem 1080×1080</span>
-```
-
-por:
-
-```html
-        <span id="downloadLabel">Baixar imagem</span>
-```
-
-E em `setFormat()`, ao final, acrescentar:
-
-```js
-    const downloadLabel = document.getElementById("downloadLabel");
-    if (downloadLabel) {
-      downloadLabel.textContent = `Baixar imagem ${dims.width}×${dims.height}`;
-    }
-```
-
-- [ ] **Step 4: Verificar o PNG exportado em cada formato**
-
-Run: abrir o app, enviar uma foto, exportar nos três formatos e inspecionar os arquivos.
-Expected: `1080x1080`, `1080x1350` e `1080x1920`, com nome no padrão `avatar-...`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add static/js/editor.js index.html
-git commit -m "feat: exportacao com dimensoes e nome por formato"
-```
-
----
-
-### Task 5: Matriz de teste multi-formato
-
-Baseline completo em quadrado, amostra estratégica nos demais. 19 execuções, não 39.
-
-**Files:**
-- Modify: `tests/harness.js` (`runCase`), `tests/run.js` (constantes e `main()`)
-
-**Interfaces:**
-- Consumes: `runCase({url, photoPath, viewport, timeoutMs, raceDuringExport})` existente.
-- Produces: `runCase()` aceita `format` (string opcional) e clica no chip correspondente antes de capturar; `selectFormat(cdp, formatId, timeoutMs)` reutilizável.
-
-- [ ] **Step 1: Escrever o helper de seleção de formato**
-
-Em `tests/harness.js`, antes de `runCase`:
-
-```js
-async function selectFormat(cdp, formatId, timeoutMs) {
-  const expression = `
-    (function () {
-      const chip = document.querySelector('.format-chip[data-format="${formatId}"]');
-      if (!chip) return "chip-ausente";
-      chip.click();
-      return "ok";
-    })()
-  `;
-  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true });
-  if (result.result.value !== "ok") {
-    throw new Error(`formato ${formatId} não encontrado na interface`);
-  }
-  await waitForCondition(
-    cdp,
-    `document.querySelector('.format-chip[data-format="${formatId}"]').getAttribute('aria-checked') === 'true'`,
-    timeoutMs
-  );
-}
-```
-
-- [ ] **Step 2: Aceitar `format` em `runCase()`**
-
-Na assinatura:
-
-```js
-async function runCase({
-  url,
-  photoPath,
-  viewport,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  headless = true,
-  raceDuringExport = false,
-  format = null,
-} = {}) {
-```
-
-E, dentro do `try`, logo depois do `waitForCondition` que espera `#adjustments` e antes de `capturePreviewPng`:
-
-```js
-    if (format) {
-      await selectFormat(cdp, format, timeoutMs);
-    }
-```
-
-- [ ] **Step 3: Definir a matriz em `run.js`**
-
-Substituir a constante `DEFAULT_CASES` por:
-
-```js
-const BASELINE_CASES = [
-  "12mp.jpg",
-  "48mp.jpg",
-  "exif1.jpg",
-  "exif2.jpg",
-  "exif3.jpg",
-  "exif4.jpg",
-  "exif5.jpg",
-  "exif6.jpg",
-  "exif7.jpg",
-  "exif8.jpg",
-  "transparente.png",
-  "foto.webp",
-  "pesada.jpg",
-];
-
-// Baseline completo em quadrado; amostra estratégica nos demais formatos.
-// As três fixtures cobrem eixos distintos: imagem normal, orientação EXIF
-// e arquivo pesado com enquadramento complexo. Triplicar as 13 custaria
-// 39 execuções sem cobrir nada que estas três já não denunciem.
-const SAMPLE_CASES = ["12mp.jpg", "exif6.jpg", "pesada.jpg"];
-
-const MATRIX = [
-  ...BASELINE_CASES.map((name) => ({ name, format: "quadrado" })),
-  ...SAMPLE_CASES.map((name) => ({ name, format: "feed" })),
-  ...SAMPLE_CASES.map((name) => ({ name, format: "story" })),
-];
-```
-
-- [ ] **Step 4: Percorrer a matriz em `main()`**
-
-Substituir o laço de casos por:
-
-```js
-  const matrix = process.env.CASES
-    ? process.env.CASES.split(",").map((name) => ({ name, format: "quadrado" }))
-    : MATRIX;
-
-  for (const { name: caseName, format } of matrix) {
-    const photoPath = path.join(FIXTURES, caseName);
-    const label = `${caseName} [${format}]`;
-    const caseDir = path.join(
-      outDir,
-      `${path.basename(caseName, path.extname(caseName))}-${format}`
-    );
-    fs.mkdirSync(caseDir, { recursive: true });
-    process.stdout.write(`\n> ${label}\n`);
-
-    const result = await runCase({
-      url,
-      photoPath,
-      viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
-      timeoutMs,
-      format,
-    });
-    assertNoApiRequests(result.networkRequests, label);
-
-    const previewPath = path.join(caseDir, "preview.png");
-    const downloadPath = path.join(caseDir, "download.png");
-    fs.writeFileSync(previewPath, result.previewPng);
-    fs.writeFileSync(downloadPath, result.downloadPng);
-    runPythonCompare(previewPath, downloadPath);
-    assertExifMarkers(caseName, previewPath);
-  }
-```
-
-- [ ] **Step 5: Rodar a race condition também em formato não quadrado**
-
-Substituir o bloco da corrida por:
-
-```js
-  for (const raceFormat of ["quadrado", "story"]) {
-    process.stdout.write(`\n> corrida de exportação com zoom [${raceFormat}]\n`);
-    const race = await runCase({
-      url,
-      photoPath: path.join(FIXTURES, "12mp.jpg"),
-      viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
-      timeoutMs,
-      format: raceFormat,
-      raceDuringExport: true,
-    });
-    if (!race.raceState || race.raceState.resultHidden !== true || race.raceState.resultImageSrc) {
-      throw new Error(`corrida [${raceFormat}]: resultCard exibiu blob obsoleto após mudança de zoom`);
-    }
-    if (race.raceState.zoomValue !== "150") {
-      throw new Error(`corrida [${raceFormat}]: mudança de zoom não foi aplicada`);
-    }
-  }
-
-  console.log(`\nOK: ${matrix.length} casos, corrida em 2 formatos, WYSIWYG e rede verificados`);
-```
-
-- [ ] **Step 6: Rodar a matriz completa**
-
-Run: `node tests/run.js http://127.0.0.1:8000/`
-Expected: `OK: 19 casos, corrida em 2 formatos, WYSIWYG e rede verificados`, todos com `0 pixels diferentes`
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add tests/harness.js tests/run.js
-git commit -m "test: matriz WYSIWYG 13+3+3 e corrida em formato nao quadrado"
-```
-
----
-
-# FASE 3 — Infraestrutura de tenant
-
-### Task 6: tenant.js — slug e resolução de assets
-
-Funções puras, testáveis em Node sem browser.
-
-**Files:**
-- Create: `static/js/tenant.js`, `tests/tenant.test.js`
-
-**Interfaces:**
-- Consumes: nada.
-- Produces:
-
-```js
-export class TenantError extends Error   // campos: name, code, message
-export const FORMAT_IDS      // ["quadrado", "feed", "story"]
-export const RESERVED_SLUGS  // ["admin","api","assets","static","tenants","login"]
-export function readSlug(pathname)                          // -> string | null, lança TenantError
-export function resolveAssetPath(slug, assetPath, version)  // -> string, lança TenantError
-```
-
-- [ ] **Step 1: Escrever os testes que falham**
-
-Criar `tests/tenant.test.js`:
-
-```js
-"use strict";
-
-const assert = require("node:assert/strict");
-const { test } = require("node:test");
-const { pathToFileURL } = require("node:url");
-const path = require("node:path");
-
-const MODULE_URL = pathToFileURL(
-  path.join(__dirname, "..", "static", "js", "tenant.js")
-).href;
-
-test("readSlug extrai o primeiro segmento", async () => {
-  const { readSlug } = await import(MODULE_URL);
-  assert.equal(readSlug("/gd"), "gd");
-  assert.equal(readSlug("/joao-silva/"), "joao-silva");
-  assert.equal(readSlug("/gd/qualquer/coisa"), "gd");
-});
-
-test("readSlug devolve null na raiz", async () => {
-  const { readSlug } = await import(MODULE_URL);
-  assert.equal(readSlug("/"), null);
-  assert.equal(readSlug(""), null);
-});
-
-test("readSlug rejeita slug fora do padrão", async () => {
-  const { readSlug, TenantError } = await import(MODULE_URL);
-  for (const invalido of ["/Joao", "/joao_silva", "/joão", "/joao silva"]) {
-    assert.throws(() => readSlug(invalido), TenantError, invalido);
-  }
-});
-
-test("readSlug rejeita slug reservado", async () => {
-  const { readSlug, TenantError } = await import(MODULE_URL);
-  for (const reservado of ["/admin", "/api", "/static", "/tenants", "/login", "/assets"]) {
-    assert.throws(() => readSlug(reservado), TenantError, reservado);
-  }
-});
-
-test("resolveAssetPath monta o caminho versionado do próprio tenant", async () => {
-  const { resolveAssetPath } = await import(MODULE_URL);
-  assert.equal(
-    resolveAssetPath("gd", "masks/rosa/story.png", "3"),
-    "/static/tenants/gd/masks/rosa/story.png?v=3"
-  );
-  assert.equal(resolveAssetPath("gd", "logo.png", "1"), "/static/tenants/gd/logo.png?v=1");
-});
-
-test("resolveAssetPath bloqueia fuga do diretório do tenant", async () => {
-  const { resolveAssetPath, TenantError } = await import(MODULE_URL);
-  const proibidos = [
-    "../gd/logo.png",
-    "masks/../../gd/logo.png",
-    "/static/tenants/gd/logo.png",
-    "https://externo.com/imagem.png",
-    "//externo.com/imagem.png",
-    "",
-  ];
-  for (const caminho of proibidos) {
-    assert.throws(() => resolveAssetPath("joao", caminho, "1"), TenantError, caminho);
-  }
-});
-```
-
-- [ ] **Step 2: Rodar e confirmar que falha**
-
-Run: `node --test tests/tenant.test.js`
-Expected: FAIL, módulo `tenant.js` inexistente
-
-- [ ] **Step 3: Implementar `tenant.js`**
-
-Criar `static/js/tenant.js`:
-
-```js
-"use strict";
-
-export const FORMAT_IDS = Object.freeze(["quadrado", "feed", "story"]);
-
-// Reservados para uso futuro do produto: painel, API, landing.
-export const RESERVED_SLUGS = Object.freeze([
-  "admin",
-  "api",
-  "assets",
-  "static",
-  "tenants",
-  "login",
-]);
-
-const SLUG_PATTERN = /^[a-z0-9-]+$/;
-
-export class TenantError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = "TenantError";
-    this.code = code;
+    draw();
   }
 }
 
-export function readSlug(pathname) {
-  const segments = String(pathname || "")
-    .split("/")
-    .filter(Boolean);
+Nesta task ainda não existe máscara dinâmica. A recarga de máscara do novo formato entra somente na Task 10.
 
-  if (segments.length === 0) return null;
+Não inverter a ordem entre atualização de dims, resize do canvas, invalidação e autoFit.
 
-  const slug = segments[0];
+Testes
 
-  if (!SLUG_PATTERN.test(slug)) {
-    throw new TenantError("slug_invalido", `Slug fora do padrão: ${slug}`);
-  }
-  if (RESERVED_SLUGS.includes(slug)) {
-    throw new TenantError("slug_reservado", `Slug reservado: ${slug}`);
-  }
+busca por \bSIZE\b deve retornar zero;
 
-  return slug;
-}
+baseline quadrado existente continua pixel-perfect;
 
-// O config declara caminhos relativos e o sistema monta a URL final. Um
-// caminho absoluto ou externo permitiria um tenant referenciar assets de
-// outro — ou de fora do domínio — e furar o isolamento.
-export function resolveAssetPath(slug, assetPath, version) {
+app continua executável após commit.
+
+Não alterar
+
+lógica EXIF;
+
+algoritmo de rotação;
+
+race condition;
+
+templates fixos ainda existentes.
+
+Aceite
+
+Quadrado continua sem regressão e core aceita dimensões variáveis.
+
+Commit
+
+feat: geometria de canvas por formato
+
+Task 3 — Seletor de formato e preview responsivo
+
+Objetivo
+
+Adicionar UI provisória para alternar os três formatos antes do multi-tenant.
+
+Dependências
+
+Task 2.
+
+Alterar
+
+index.html
+
+static/css/style.css
+
+static/js/editor.js
+
+Implementar
+
+#formatGrid;
+
+chips/botões com data-format;
+
+renderFormats(formatIds);
+
+syncFormatChips();
+
+--canvas-aspect.
+
+Acessibilidade
+
+role="radiogroup";
+
+botões nativos;
+
+role="radio";
+
+aria-checked.
+
+Preview
+
+Proporção deriva do formato ativo.
+
+Story não deve tornar controles inutilizáveis em tela baixa.
+
+Evitar CSS que dependa de viewport de forma incompatível com navegadores móveis antigos; usar fallback seguro se dvh for usado.
+
+Inicialização provisória
+
+Até a Task 10:
+
+renderFormats(Object.keys(FORMAT_DIMS))
+
+Essa chamada provisória deve ser explicitamente removida na virada.
+
+Testes
+
+Manualmente/automação:
+
+1:1;
+
+4:5;
+
+9:16;
+
+troca executa autoFit;
+
+resultado anterior é invalidado.
+
+Aceite
+
+Três formatos alternáveis, app executável.
+
+Commit
+
+feat: seletor de formato e preview responsivo
+
+Task 4 — Exportação multi-formato
+
+Objetivo
+
+Exportar PNG nas dimensões do formato ativo.
+
+Dependências
+
+Tasks 2–3.
+
+Alterar
+
+static/js/editor.js
+
+index.html
+
+Regras
+
+PNG final:
+
+quadrado 1080×1080
+feed     1080×1350
+story    1080×1920
+
+Rótulo de download acompanha dimensão.
+
+Até a Task 10 podem existir identificadores provisórios neutros:
+
+tenantSlug = cliente
+currentTemplateId = modelo
+
+Eles são obrigatoriamente removidos na Task 10.
+
+Nome final
+
+avatar-{tenant}-{template}-{format}-{width}x{height}.png
+
+Testes
+
+Exportar os três formatos e validar dimensão real do PNG.
+
+Não alterar
+
+A matemática da renderização entre preview e export.
+
+Aceite
+
+Dimensão e nome corretos, sem regressão no quadrado.
+
+Commit
+
+feat: exportacao png por formato
+
+Task 5 — Matriz WYSIWYG multi-formato
+
+Objetivo
+
+Cobrir dimensões variáveis sem triplicar inutilmente a suíte.
+
+Dependências
+
+Tasks 1–4.
+
+Alterar
+
+tests/harness.js
+
+tests/run.js
+
+Matriz
+
+Baseline quadrado:
+
+13 fixtures
+
+Amostra feed:
+
+3 fixtures
+
+Amostra story:
+
+3 fixtures
+
+Total:
+
+19
+
+A amostra deve cobrir:
+
+imagem normal;
+
+EXIF/orientação;
+
+caso pesado/complexo.
+
+Race condition
+
+Executar em:
+
+quadrado;
+
+story.
+
+Harness
+
+runCase() recebe format.
+
+selectFormat() deve esperar estado real do chip, não timeout fixo.
+
+Aceite
+
+19 casos
+0 pixels diferentes
+race verde em quadrado e story
+nenhuma chamada /api
+
+Commit
+
+test: matriz wysiwyg multi-formato
+
+FASE 2 — Infraestrutura de tenant
+
+Task 6 — tenant.js: slug e resolução segura de assets
+
+Objetivo
+
+Criar primitivas puras de tenant antes de qualquer integração com o editor.
+
+Dependências
+
+Task 5.
+
+Criar
+
+static/js/tenant.js
+
+tests/tenant.test.js
+
+Exportar
+
+TenantError
+FORMAT_IDS
+RESERVED_SLUGS
+readSlug(pathname)
+resolveAssetPath(slug, assetPath, version)
+
+Slug
+
+Aceitar somente:
+
+^[a-z0-9-]+$
+
+Template/asset safety
+
+resolveAssetPath deve rejeitar:
+
+vazio;
+
+/...;
+
+\;
+
+?;
+
+#;
+
+%;
+
+:;
+
+//;
+
+. como segmento;
+
+.. como segmento;
+
+URLs externas.
+
+Cada segmento aceito deve usar somente caracteres seguros de arquivo:
+
+^[A-Za-z0-9._-]+$
+
+e não pode ser . ou ...
+
+Produzir
+
+/static/tenants/{slug}/{asset}?v={version}
+
+Implementation Lock
+
+A resolução de asset deve seguir esta lógica, sem normalizar silenciosamente entrada inválida:
+
+function resolveAssetPath(slug, assetPath, version) {
   if (typeof assetPath !== "string" || assetPath.length === 0) {
-    throw new TenantError("asset_invalido", "Caminho de asset vazio.");
+    throw new TenantError("asset_invalido", "Asset vazio.");
   }
-  if (assetPath.startsWith("/") || assetPath.includes("://")) {
-    throw new TenantError("asset_invalido", `Caminho de asset não relativo: ${assetPath}`);
+
+  if (
+    assetPath.startsWith("/") ||
+    assetPath.includes("\\") ||
+    assetPath.includes("?") ||
+    assetPath.includes("#") ||
+    assetPath.includes("%") ||
+    assetPath.includes(":") ||
+    assetPath.startsWith("//")
+  ) {
+    throw new TenantError("asset_invalido", "Asset não relativo ou inseguro.");
   }
-  if (assetPath.split("/").includes("..")) {
-    throw new TenantError("asset_invalido", `Caminho de asset com "..": ${assetPath}`);
+
+  const segments = assetPath.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        !segment ||
+        segment === "." ||
+        segment === ".." ||
+        !/^[A-Za-z0-9._-]+$/.test(segment)
+    )
+  ) {
+    throw new TenantError("asset_invalido", "Segmento de asset inválido.");
   }
 
   return `/static/tenants/${slug}/${assetPath}?v=${encodeURIComponent(version)}`;
 }
-```
 
-- [ ] **Step 4: Rodar e confirmar que passa**
+Não usar new URL(assetPath, ...) para “corrigir” input do tenant. Entrada inválida deve falhar, não ser normalizada.
 
-Run: `node --test tests/tenant.test.js`
-Expected: PASS, 6 testes
+Testes mínimos
 
-- [ ] **Step 5: Commit**
+raiz → null;
 
-```bash
-git add static/js/tenant.js tests/tenant.test.js
-git commit -m "feat: tenant.js com slug e resolucao segura de assets"
-```
+primeiro segmento;
 
----
+maiúscula rejeitada;
 
-### Task 7: tenant.js — validação de schema
+acento rejeitado;
 
-Fail closed. Config inválido nunca inicializa o editor.
+reservado rejeitado;
 
-**Files:**
-- Modify: `static/js/tenant.js`, `tests/tenant.test.js`
+path válido;
 
-**Interfaces:**
-- Consumes: `TenantError`, `FORMAT_IDS`, `resolveAssetPath` da Task 6.
-- Produces:
+traversal simples;
 
-```js
-export function validateConfig(raw, slug)                  // -> TenantConfig, lança TenantError
-export async function loadTenant(slug, fetchImpl = fetch)  // -> TenantConfig
-```
+barra invertida;
 
-`TenantConfig`:
+query/hash;
 
-```js
+URL;
+
+%2e%2e rejeitado por conter %.
+
+Aceite
+
+Testes Node verdes sem browser.
+
+Commit
+
+feat: primitivas seguras de tenant
+
+Task 7 — tenant.js: schema e loadTenant
+
+Objetivo
+
+Validar integralmente o contrato de configuração.
+
+Dependências
+
+Task 6.
+
+Alterar
+
+static/js/tenant.js
+
+tests/tenant.test.js
+
+Produzir
+
+validateConfig(raw, slug)
+loadTenant(slug, fetchImpl)
+
+Contrato
+
 {
-  slug: string,
-  version: string,
-  brand: { name, title, description, primaryColor, secondaryColor, logo },  // logo: URL versionada ou null
-  formats: string[],
-  templates: Array<{ id: string, name: string, assets: Record<formatId, string> }>,  // assets: URLs versionadas
-  defaults: { template: string, format: string }
-}
-```
-
-- [ ] **Step 1: Escrever os testes que falham**
-
-Acrescentar a `tests/tenant.test.js`:
-
-```js
-function configValido() {
-  return {
-    slug: "gd",
-    version: "1",
-    brand: {
-      name: "GD",
-      title: "Monte sua foto com GD!",
-      description: "Escolha um modelo.",
-      primaryColor: "#ff4fa3",
-      secondaryColor: "#2458ff",
-      logo: "logo.png",
-    },
-    formats: ["quadrado", "story"],
-    templates: [
-      {
-        id: "rosa",
-        name: "Modelo Rosa",
-        assets: { quadrado: "masks/rosa/quadrado.png", story: "masks/rosa/story.png" },
-      },
-    ],
-    defaults: { template: "rosa", format: "quadrado" },
-  };
+  "slug": "cliente",
+  "version": "1",
+  "brand": {},
+  "formats": [],
+  "templates": [],
+  "defaults": {}
 }
 
-test("validateConfig aceita config completo e resolve assets", async () => {
-  const { validateConfig } = await import(MODULE_URL);
-  const tenant = validateConfig(configValido(), "gd");
+Regras
 
-  assert.equal(tenant.slug, "gd");
-  assert.equal(tenant.brand.logo, "/static/tenants/gd/logo.png?v=1");
-  assert.equal(
-    tenant.templates[0].assets.story,
-    "/static/tenants/gd/masks/rosa/story.png?v=1"
-  );
-});
+Obrigatórios:
 
-test("validateConfig exige campos obrigatórios", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  const caminhos = [
-    ["slug"],
-    ["version"],
-    ["brand", "name"],
-    ["brand", "primaryColor"],
-    ["formats"],
-    ["templates"],
-    ["defaults", "template"],
-    ["defaults", "format"],
-  ];
+slug;
 
-  for (const caminho of caminhos) {
-    const config = configValido();
-    let alvo = config;
-    for (const chave of caminho.slice(0, -1)) alvo = alvo[chave];
-    delete alvo[caminho.at(-1)];
-    assert.throws(() => validateConfig(config, "gd"), TenantError, caminho.join("."));
-  }
-});
+version;
 
-test("validateConfig rejeita formato fora do enum", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  const config = configValido();
-  config.formats = ["quadrado", "banner"];
-  assert.throws(() => validateConfig(config, "gd"), TenantError);
-});
+brand.name;
 
-test("validateConfig rejeita slug divergente da URL", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  assert.throws(() => validateConfig(configValido(), "joao"), TenantError);
-});
+brand.primaryColor;
 
-test("validateConfig rejeita id de template duplicado", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  const config = configValido();
-  config.templates.push({ ...config.templates[0] });
-  assert.throws(() => validateConfig(config, "gd"), TenantError);
-});
+formats[];
 
-test("validateConfig proíbe configuração parcial de assets", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  const config = configValido();
-  delete config.templates[0].assets.story;
-  assert.throws(() => validateConfig(config, "gd"), TenantError);
-});
+templates[];
 
-test("validateConfig rejeita defaults inexistentes", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
+templates[].id;
 
-  const semTemplate = configValido();
-  semTemplate.defaults.template = "inexistente";
-  assert.throws(() => validateConfig(semTemplate, "gd"), TenantError);
+templates[].name;
 
-  const formatoNaoHabilitado = configValido();
-  formatoNaoHabilitado.defaults.format = "feed";
-  assert.throws(() => validateConfig(formatoNaoHabilitado, "gd"), TenantError);
-});
+templates[].assets;
 
-test("validateConfig exige ao menos um formato e um template", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
+defaults.template;
 
-  const semFormato = configValido();
-  semFormato.formats = [];
-  assert.throws(() => validateConfig(semFormato, "gd"), TenantError);
+defaults.format.
 
-  const semTemplate = configValido();
-  semTemplate.templates = [];
-  assert.throws(() => validateConfig(semTemplate, "gd"), TenantError);
-});
+Cores
 
-test("validateConfig rejeita asset com caminho de fuga", async () => {
-  const { validateConfig, TenantError } = await import(MODULE_URL);
-  const config = configValido();
-  config.templates[0].assets.quadrado = "../joao/masks/principal/quadrado.png";
-  assert.throws(() => validateConfig(config, "gd"), TenantError);
-});
+Aceitar somente HEX válido com:
 
-test("loadTenant busca config.json sem query string", async () => {
-  const { loadTenant } = await import(MODULE_URL);
-  const chamadas = [];
-  const fetchFake = async (url) => {
-    chamadas.push(url);
-    return { ok: true, json: async () => configValido() };
-  };
+3;
 
-  await loadTenant("gd", fetchFake);
-  assert.deepEqual(chamadas, ["/static/tenants/gd/config.json"]);
-});
+4;
 
-test("loadTenant transforma 404 em TenantError", async () => {
-  const { loadTenant, TenantError } = await import(MODULE_URL);
-  const fetchFake = async () => ({ ok: false, status: 404 });
-  await assert.rejects(() => loadTenant("inexistente", fetchFake), TenantError);
-});
-```
+6;
 
-- [ ] **Step 2: Rodar e confirmar que falha**
+8 dígitos.
 
-Run: `node --test tests/tenant.test.js`
-Expected: FAIL, `validateConfig is not a function`
+Regex equivalente:
 
-- [ ] **Step 3: Implementar validação e carga**
+^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$
 
-Acrescentar a `static/js/tenant.js`:
+IDs
 
-```js
-const MAX_TEMPLATES = 20;
-const COR_HEX = /^#[0-9a-fA-F]{3,8}$/;
+Template id:
 
-function exigir(condicao, code, message) {
-  if (!condicao) throw new TenantError(code, message);
-}
+^[a-z0-9-]+$
 
-function texto(valor) {
-  return typeof valor === "string" && valor.trim().length > 0;
-}
+Sem duplicados.
 
-export function validateConfig(raw, slug) {
-  exigir(raw && typeof raw === "object", "config_invalido", "config.json não é um objeto.");
+Formats:
 
-  exigir(texto(raw.slug), "campo_ausente", "Campo obrigatório ausente: slug");
-  exigir(
-    raw.slug === slug,
-    "slug_divergente",
-    `config.json declara slug "${raw.slug}" mas foi carregado como "${slug}".`
-  );
-  exigir(texto(raw.version), "campo_ausente", "Campo obrigatório ausente: version");
+ao menos 1;
 
-  const brand = raw.brand;
-  exigir(brand && typeof brand === "object", "campo_ausente", "Campo obrigatório ausente: brand");
-  exigir(texto(brand.name), "campo_ausente", "Campo obrigatório ausente: brand.name");
-  exigir(
-    texto(brand.primaryColor) && COR_HEX.test(brand.primaryColor),
-    "campo_invalido",
-    "brand.primaryColor precisa ser uma cor hexadecimal."
-  );
+enum válido;
 
-  const formats = raw.formats;
-  exigir(
-    Array.isArray(formats) && formats.length > 0,
-    "campo_ausente",
-    "formats[] precisa de ao menos um formato."
-  );
-  formats.forEach((formatId) => {
-    exigir(
-      FORMAT_IDS.includes(formatId),
-      "formato_invalido",
-      `Formato fora do enum oficial: ${formatId}`
-    );
-  });
+sem duplicados.
 
-  const templates = raw.templates;
-  exigir(
-    Array.isArray(templates) && templates.length > 0,
-    "campo_ausente",
-    "templates[] precisa de ao menos um template."
-  );
-  exigir(
-    templates.length <= MAX_TEMPLATES,
-    "campo_invalido",
-    `templates[] excede o máximo de ${MAX_TEMPLATES}.`
-  );
+Templates:
 
-  const vistos = new Set();
-  const templatesResolvidos = templates.map((template) => {
-    exigir(template && typeof template === "object", "campo_invalido", "Template não é um objeto.");
-    exigir(texto(template.id), "campo_ausente", "Campo obrigatório ausente: templates[].id");
-    exigir(texto(template.name), "campo_ausente", "Campo obrigatório ausente: templates[].name");
-    exigir(!vistos.has(template.id), "template_duplicado", `Id de template repetido: ${template.id}`);
-    vistos.add(template.id);
+1..20;
 
-    const assets = template.assets;
-    exigir(
-      assets && typeof assets === "object",
-      "campo_ausente",
-      `Campo obrigatório ausente: templates[${template.id}].assets`
-    );
+todo formato habilitado precisa de asset.
 
-    // Configuração parcial é proibida: se o formato está habilitado, todo
-    // template precisa da arte correspondente. Senão o cliente descobre o
-    // buraco só quando um usuário clicar no formato.
-    const resolvidos = {};
-    formats.forEach((formatId) => {
-      exigir(
-        texto(assets[formatId]),
-        "asset_ausente",
-        `Template "${template.id}" não tem asset para o formato "${formatId}".`
-      );
-      resolvidos[formatId] = resolveAssetPath(raw.slug, assets[formatId], raw.version);
-    });
+Defaults:
 
-    return { id: template.id, name: template.name, assets: resolvidos };
-  });
+template existente;
 
-  const defaults = raw.defaults;
-  exigir(defaults && typeof defaults === "object", "campo_ausente", "Campo obrigatório ausente: defaults");
-  exigir(texto(defaults.template), "campo_ausente", "Campo obrigatório ausente: defaults.template");
-  exigir(texto(defaults.format), "campo_ausente", "Campo obrigatório ausente: defaults.format");
-  exigir(
-    vistos.has(defaults.template),
-    "default_invalido",
-    `defaults.template aponta para template inexistente: ${defaults.template}`
-  );
-  exigir(
-    formats.includes(defaults.format),
-    "default_invalido",
-    `defaults.format aponta para formato não habilitado: ${defaults.format}`
-  );
+formato habilitado.
 
-  return {
-    slug: raw.slug,
-    version: raw.version,
-    brand: {
-      name: brand.name,
-      title: texto(brand.title) ? brand.title : brand.name,
-      description: texto(brand.description) ? brand.description : "",
-      primaryColor: brand.primaryColor,
-      secondaryColor: texto(brand.secondaryColor) ? brand.secondaryColor : "#ffffff",
-      logo: texto(brand.logo) ? resolveAssetPath(raw.slug, brand.logo, raw.version) : null,
-    },
-    formats: [...formats],
-    templates: templatesResolvidos,
-    defaults: { template: defaults.template, format: defaults.format },
-  };
-}
+Brand
 
-export async function loadTenant(slug, fetchImpl = fetch) {
-  // Sem query string: version só é conhecido depois de ler o próprio
-  // arquivo. A revalidação fica a cargo do header declarado em _headers.
+title fallback para name;
+
+description fallback para vazio;
+
+secondaryColor fallback seguro;
+
+logo opcional.
+
+loadTenant
+
+Buscar exatamente:
+
+/static/tenants/{slug}/config.json
+
+Sem ?v.
+
+Tratar:
+
+rede;
+
+404;
+
+JSON inválido;
+
+schema inválido.
+
+Implementation Lock
+
+validateConfig() deve executar validação antes de produzir URLs finais.
+
+Sequência obrigatória:
+
+raw é objeto
+→ slug/version
+→ brand
+→ formats
+→ templates + ids
+→ assets completos por formato
+→ defaults
+→ resolver logo/assets
+→ retornar TenantConfig normalizado
+
+Não resolver assets antes de validar slug, version, formatos e ids.
+
+loadTenant() deve seguir:
+
+async function loadTenant(slug, fetchImpl = fetch) {
   const url = `/static/tenants/${slug}/config.json`;
 
   let response;
   try {
     response = await fetchImpl(url);
   } catch (error) {
-    throw new TenantError("rede", `Falha de rede ao carregar ${url}: ${error.message}`);
+    throw new TenantError("rede", "Falha ao carregar tenant.");
   }
 
   if (!response.ok) {
     throw new TenantError(
-      "tenant_inexistente",
-      `Tenant não encontrado: ${slug} (HTTP ${response.status})`
+      response.status === 404 ? "tenant_inexistente" : "http",
+      `Falha HTTP ${response.status}`
     );
   }
 
@@ -1297,158 +1259,1568 @@ export async function loadTenant(slug, fetchImpl = fetch) {
   try {
     raw = await response.json();
   } catch {
-    throw new TenantError("json_invalido", `config.json de "${slug}" não é JSON válido.`);
+    throw new TenantError("json_invalido", "config.json inválido.");
   }
 
   return validateConfig(raw, slug);
 }
-```
 
-- [ ] **Step 4: Rodar e confirmar que passa**
+Não adicionar query string ao config.json.
 
-Run: `node --test tests/tenant.test.js`
-Expected: PASS, 17 testes
+Testes
 
-- [ ] **Step 5: Commit**
+Cobrir todos os erros acima e confirmar que assets resolvidos recebem version.
 
-```bash
-git add static/js/tenant.js tests/tenant.test.js
-git commit -m "feat: validacao fail-closed do contrato de tenant"
-```
+Aceite
 
----
+Schema fail-closed e teste unitário verde.
 
-### Task 8: Servidor de desenvolvimento com SPA fallback
+Commit
 
-Sem ele, `/gd` devolve 404 localmente e nenhum teste de tenant roda.
+feat: contrato fail-closed de tenant
 
-**Files:**
-- Create: `tests/server.js`
+Task 8 — Servidor SPA local seguro
 
-**Interfaces:**
-- Consumes: nada.
-- Produces: `node tests/server.js [porta] [raiz]` serve arquivos estáticos e devolve `index.html` com HTTP 200 para qualquer rota sem extensão, espelhando `not_found_handling = "single-page-application"`. Exporta `criarServidor(raiz)`.
+Objetivo
 
-- [ ] **Step 1: Implementar o servidor**
+Testar /gd, /joao e / localmente sem depender de Cloudflare.
 
-Criar `tests/server.js`:
+Dependências
 
-```js
-"use strict";
+Task 7.
 
-const fs = require("node:fs");
-const http = require("node:http");
-const path = require("node:path");
+Criar
 
-const TIPOS = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".txt": "text/plain; charset=utf-8",
-};
+tests/server.js
 
-function criarServidor(raiz) {
-  const base = path.resolve(raiz);
+tests/server.test.js se necessário para manter verificação pequena e determinística.
 
-  return http.createServer((req, res) => {
-    const url = new URL(req.url, "http://127.0.0.1");
-    const relativo = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    const alvo = path.resolve(base, relativo);
+Regras
 
-    // Nunca servir nada acima da raiz, mesmo que a URL tente escapar.
-    if (!alvo.startsWith(base)) {
-      res.writeHead(403).end("forbidden");
+servir arquivo existente;
+
+rota sem extensão inexistente → index.html, HTTP 200;
+
+arquivo inexistente com extensão → 404;
+
+config → Cache-Control: public, max-age=0, must-revalidate;
+
+impedir saída da raiz.
+
+Segurança de path
+
+Não usar somente:
+
+alvo.startsWith(base)
+
+Usar path.relative() e rejeitar quando:
+
+resultado inicia em ..;
+
+resultado é absoluto.
+
+Implementation Lock
+
+Containment da raiz deve usar path.relative():
+
+function pathDentroDaRaiz(base, alvo) {
+  const relativo = path.relative(base, alvo);
+  return relativo === "" || (!relativo.startsWith("..") && !path.isAbsolute(relativo));
+}
+
+Fluxo do servidor:
+
+parse URL
+→ decode pathname
+→ resolver alvo
+→ containment check
+→ arquivo existente: servir
+→ rota sem extensão: index.html
+→ restante: 404
+
+Não usar alvo.startsWith(base) como controle de segurança.
+
+Testes
+
+/gd → 200 index
+/static/js/tenant.js → 200
+/static/js/inexistente.js → 404
+traversal → 403/404
+
+Aceite
+
+SPA local espelha comportamento futuro sem path traversal.
+
+Commit
+
+test: servidor spa local seguro
+
+Task 9 — Tenants de referência + validator real
+
+Objetivo
+
+Criar tenants reais/fictícios antes da virada do editor e validar configs/assets no disco.
+
+Dependências
+
+Tasks 1, 7 e 8.
+
+Criar
+
+static/tenants/gd/
+static/tenants/joao/
+static/tenants/_template/
+tests/validate-tenant.js
+
+GD
+
+Tenant comum.
+
+Publicar inicialmente:
+
+formats: ["quadrado"]
+templates:
+- rosa
+- azul
+
+Mover artes quadradas existentes para dentro de static/tenants/gd.
+
+Nenhum tratamento especial no core.
+
+João
+
+Tenant fictício de teste.
+
+Publicar:
+
+formats:
+- quadrado
+- feed
+- story
+
+templates:
+- principal
+
+Usar fixtures sintéticas.
+
+_template
+
+Modelo de cópia operacional.
+
+Não precisa ser tenant navegável.
+
+Seu slug interno pode continuar _template, desde que o validator tenha modo explícito de template ou não tente tratá-lo como URL real.
+
+Validator
+
+Criar:
+
+node tests/validate-tenant.js gd
+node tests/validate-tenant.js joao
+
+Ele deve:
+
+localizar config real;
+
+executar validateConfig;
+
+converter URLs resolvidas novamente para caminhos locais de forma controlada ou validar a partir do raw config;
+
+confirmar existência de todos os assets declarados;
+
+confirmar logo se declarada;
+
+sair != 0 em erro.
+
+Esse validator é o responsável por garantir todos os assets sem custo de preflight no browser.
+
+Aceite
+
+gd OK
+joao OK
+
+e validator falha ao remover artificialmente um asset em teste.
+
+Commit
+
+feat: tenants de referencia e validator
+
+FASE 3 — Virada multi-tenant
+
+Task 10 — Virada atômica: initEditor + templates dinâmicos + bootstrap + landing
+
+Objetivo
+
+Remover clientes/templates hardcoded e ligar a aplicação ao TenantConfig sem deixar commit intermediário quebrado.
+
+Dependências
+
+Tasks 2–9.
+
+Esta task é atômica
+
+Ela pode ser maior que as demais porque separar suas mudanças faria o index.html apontar para módulos incompletos.
+
+Não quebrar em commits intermediários.
+
+Alterar
+
+static/js/editor.js
+
+index.html
+
+static/css/style.css
+
+Criar
+
+static/js/bootstrap.js
+
+editor.js
+
+Converter para ES module:
+
+export async function initEditor({
+  slug,
+  templates,
+  formats,
+  defaultTemplate,
+  defaultFormat
+})
+
+Remover do core
+
+rosa;
+
+azul;
+
+gd;
+
+radios fixos;
+
+maskImages fixo;
+
+maskReady fixo;
+
+selectedMask;
+
+valores provisórios cliente/modelo;
+
+inicialização automática da IIFE.
+
+Estado genérico
+
+templateById
+currentTemplateId
+currentFormat
+currentMask
+maskCache
+maskRequestVersion
+maskState
+
+Loading seguro da máscara
+
+Obrigatório para evitar nova race condition.
+
+Ao iniciar troca de template/formato:
+
+incrementar maskRequestVersion;
+
+definir currentMask = null;
+
+maskState = loading;
+
+invalidar resultado;
+
+bloquear download;
+
+iniciar loadMask(template, format);
+
+no retorno, comparar requestVersion e seleção atual;
+
+resposta obsoleta é descartada;
+
+resposta atual define currentMask;
+
+maskState = ready;
+
+desenhar;
+
+liberar download.
+
+Em erro atual:
+
+maskState = error
+currentMask = null
+download bloqueado
+mensagem controlada
+
+Não permitir exportar com máscara antiga.
+
+Sinal observável
+
+Manter um estado DOM simples para testes, por exemplo:
+
+canvas.dataset.maskState = loading|ready|error
+
+Isso substitui sleep(400) em testes.
+
+Templates
+
+renderTemplates() usa templates[].
+
+Quantidade variável:
+
+1
+2
+5
+10
+...
+
+Sem alteração do core.
+
+Carregamento de máscaras sob demanda; não baixar 20×3 PNGs no boot.
+
+setTemplate
+
+valida id;
+
+preserva person;
+
+atualiza seleção;
+
+carrega máscara do mesmo formato;
+
+não executa autoFit.
+
+setFormat
+
+valida enum habilitado;
+
+muda dims;
+
+reset + autoFit;
+
+carrega máscara do template atual;
+
+não restaura estado anterior.
+
+HTML
+
+Na mesma task:
+
+#appLoading;
+
+#templateGrid vazio;
+
+#formatGrid;
+
+#tenantError;
+
+#landing;
+
+#appShell;
+
+#brandLogo;
+
+#brandTitle;
+
+#brandDescription;
+
+script type="module" apontando para bootstrap.js.
+
+Estado inicial do documento:
+
+appLoading visível
+appShell oculto
+landing oculta
+tenantError oculto
+
+Exemplo mínimo:
+
+<section id="appLoading" class="app-loading" aria-live="polite">
+  <p>Carregando editor...</p>
+</section>
+
+<section id="tenantError" hidden>
+  <h1 id="tenantErrorTitle">Cliente não encontrado</h1>
+  <p id="tenantErrorText">Verifique o endereço e tente novamente.</p>
+</section>
+
+<section id="landing" hidden>
+  <h1>Avatar</h1>
+  <p>Personalize sua campanha.</p>
+  <p>Em breve.</p>
+</section>
+
+<main id="appShell" hidden>
+  ...
+</main>
+
+Não é necessário spinner sofisticado.
+
+Landing entra nesta task, não em task posterior, para que / nunca fique em branco após a virada.
+
+Loading também entra nesta task para que rede lenta ou download da máscara default nunca resulte em tela branca.
+
+CSS
+
+--brand-primary;
+
+--brand-secondary;
+
+remover seletores de rosa/azul;
+
+tela de erro;
+
+landing;
+
+template cards dinâmicos.
+
+bootstrap.js
+
+Responsabilidades exclusivas:
+
+mostrar loading imediatamente;
+
+readSlug;
+
+se raiz → encerrar loading e mostrar landing;
+
+loadTenant;
+
+aplicar brand;
+
+await initEditor;
+
+mostrar app somente após inicialização bem-sucedida e máscara default pronta;
+
+erro técnico no console;
+
+encerrar loading e mostrar erro controlado em qualquer falha.
+
+Default mask ausente deve impedir abertura do app.
+
+Logo ausente é não-bloqueante.
+
+Implementation Lock — estado global da aplicação
+
+Estados permitidos:
+
+loading
+landing
+app
+error
+
+Somente um pode estar visível por vez.
+
+Funções canônicas:
+
+function showLoading() {
+  appLoading.hidden = false;
+  appShell.hidden = true;
+  landing.hidden = true;
+  tenantError.hidden = true;
+}
+
+function showLanding() {
+  appLoading.hidden = true;
+  appShell.hidden = true;
+  tenantError.hidden = true;
+  landing.hidden = false;
+}
+
+function showApp() {
+  appLoading.hidden = true;
+  landing.hidden = true;
+  tenantError.hidden = true;
+  appShell.hidden = false;
+}
+
+function showError(code) {
+  appLoading.hidden = true;
+  landing.hidden = true;
+  appShell.hidden = true;
+  tenantError.hidden = false;
+  // mensagem pública controlada; detalhe técnico fica no console
+}
+
+Fluxo obrigatório do bootstrap:
+
+async function bootstrap() {
+  showLoading();
+
+  try {
+    const slug = readSlug(window.location.pathname);
+
+    if (slug === null) {
+      showLanding();
       return;
     }
 
-    if (relativo && fs.existsSync(alvo) && fs.statSync(alvo).isFile()) {
-      const tipo = TIPOS[path.extname(alvo).toLowerCase()] || "application/octet-stream";
-      const headers = { "Content-Type": tipo };
-      // Espelha a política de _headers: config de tenant sempre revalidável.
-      if (alvo.endsWith("config.json")) {
-        headers["Cache-Control"] = "public, max-age=0, must-revalidate";
-      }
-      res.writeHead(200, headers).end(fs.readFileSync(alvo));
-      return;
+    const tenant = await loadTenant(slug);
+
+    applyBrand(tenant.brand);
+
+    await initEditor({
+      slug: tenant.slug,
+      templates: tenant.templates,
+      formats: tenant.formats,
+      defaultTemplate: tenant.defaults.template,
+      defaultFormat: tenant.defaults.format,
+    });
+
+    showApp();
+  } catch (error) {
+    console.error(error);
+    showError(error instanceof TenantError ? error.code : "padrao");
+  }
+}
+
+Não exibir appShell antes de await initEditor() resolver.
+
+Implementation Lock — inicialização do editor
+
+initEditor() só pode resolver quando a máscara default estiver pronta:
+
+export async function initEditor({
+  slug,
+  templates,
+  formats,
+  defaultTemplate,
+  defaultFormat,
+}) {
+  // construir estado genérico
+  // registrar listeners
+  // renderizar templates/formatos
+
+  renderTemplates();
+  renderFormats(formats);
+
+  setFormatState(defaultFormat); // estado/dimensões, sem carga duplicada
+  currentTemplateId = defaultTemplate;
+
+  await applyMask(currentTemplateId, currentFormat);
+
+  if (maskState !== "ready" || !currentMask) {
+    throw new Error("Máscara default não ficou pronta.");
+  }
+
+  draw();
+}
+
+Evitar chamar applyMask() duas vezes durante bootstrap.
+
+Implementation Lock — race da máscara
+
+let maskRequestVersion = 0;
+let maskState = "idle";
+
+async function applyMask(templateId, formatId) {
+  const requestVersion = ++maskRequestVersion;
+
+  currentMask = null;
+  maskState = "loading";
+  canvas.dataset.maskState = "loading";
+  invalidateResult();
+  syncDownloadAvailability();
+
+  try {
+    const image = await loadMask(templateId, formatId);
+
+    if (
+      requestVersion !== maskRequestVersion ||
+      templateId !== currentTemplateId ||
+      formatId !== currentFormat
+    ) {
+      return false;
     }
 
-    // SPA fallback: rota sem arquivo correspondente devolve o index com 200,
-    // para que /gd e /joao cheguem ao bootstrap no cliente.
-    if (!path.extname(relativo)) {
-      res.writeHead(200, { "Content-Type": TIPOS[".html"] })
-        .end(fs.readFileSync(path.join(base, "index.html")));
-      return;
-    }
+    currentMask = image;
+    maskState = "ready";
+    canvas.dataset.maskState = "ready";
+    draw();
+    syncDownloadAvailability();
+    return true;
+  } catch (error) {
+    if (requestVersion !== maskRequestVersion) return false;
 
-    res.writeHead(404).end("not found");
+    currentMask = null;
+    maskState = "error";
+    canvas.dataset.maskState = "error";
+    syncDownloadAvailability();
+
+    // O throw é intencional:
+    // - initEditor aguarda a máscara default e deve falhar fechado;
+    // - trocas posteriores tratam a Promise no chamador.
+    throw error;
+  }
+}
+
+syncDownloadAvailability() deve impedir download quando:
+
+maskState !== ready
+ou
+currentMask === null
+ou
+isBusy === true
+
+Não manter a máscara anterior visível durante uma troca em andamento.
+
+Implementation Lock — tratamento de erro por contexto
+
+applyMask() não deve engolir a falha, porque a máscara default faz parte da inicialização fail-closed.
+
+Na inicialização:
+
+await applyMask(defaultTemplate, defaultFormat);
+
+Se falhar, a rejeição sobe para initEditor() e depois para bootstrap(), que encerra o loading e mostra tenantError.
+
+Em ações do usuário, a falha deve ser tratada pelo chamador para nunca gerar unhandled promise rejection.
+
+setTemplate() permanece síncrona:
+
+function setTemplate(templateId) {
+  const template = templateById.get(templateId);
+  if (!template || templateId === currentTemplateId) return;
+
+  currentTemplateId = templateId;
+  syncTemplateCards();
+  invalidateResult();
+
+  applyMask(currentTemplateId, currentFormat).catch((error) => {
+    console.error(error);
+    showToast("Não foi possível carregar a arte deste modelo.", "error");
   });
 }
 
-if (require.main === module) {
-  const porta = Number(process.argv[2] || 8000);
-  const raiz = path.resolve(process.argv[3] || path.join(__dirname, ".."));
-  criarServidor(raiz).listen(porta, "127.0.0.1", () => {
-    console.log(`servindo ${raiz} em http://127.0.0.1:${porta}/`);
+setFormat() segue a mesma regra:
+
+function setFormat(formatId) {
+  if (!formats.includes(formatId) || formatId === currentFormat) return;
+
+  currentFormat = formatId;
+  dims = FORMAT_DIMS[formatId];
+
+  canvas.width = dims.width;
+  canvas.height = dims.height;
+  canvasWrap.style.setProperty("--canvas-aspect", `${dims.width} / ${dims.height}`);
+
+  invalidateResult();
+
+  if (personImage) {
+    person.rotation = 0;
+    autoFitPerson();
+  } else {
+    person = {
+      x: dims.width / 2,
+      y: dims.height / 2,
+      scale: 1,
+      rotation: 0,
+    };
+    draw();
+  }
+
+  syncFormatChips();
+
+  applyMask(currentTemplateId, currentFormat).catch((error) => {
+    console.error(error);
+    showToast("Não foi possível carregar a arte deste formato.", "error");
   });
 }
 
-module.exports = { criarServidor };
-```
+Não transformar setTemplate()/setFormat() em async apenas por conveniência se os handlers de UI não precisarem aguardar seu retorno. O contrato é: iniciar a troca, bloquear download via maskState, e tratar a Promise explicitamente.
 
-- [ ] **Step 2: Verificar o fallback**
+Uma falha em template/formato não-default deve resultar em:
 
-Run:
-```bash
-node tests/server.js 8000 &
-sleep 1
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/gd
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/static/js/tenant.js
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/static/js/nao-existe.js
-```
-Expected: `200`, `200`, `404`
+maskState = error
+currentMask = null
+download bloqueado
+toast controlado
+erro técnico no console
+app continua ativo
+nenhuma unhandled promise rejection
 
-- [ ] **Step 3: Commit**
+Testes
 
-```bash
-git add tests/server.js
-git commit -m "test: servidor local com SPA fallback"
-```
+Antes do commit:
 
----
+node tests/server.js 8000
+node tests/run.js http://127.0.0.1:8000/joao
 
-### Task 9: Tenants gd, joao e _template
+e:
 
-**Files:**
-- Create: `static/tenants/{_template,gd,joao}/config.json` e assets
-- Move: `static/img/mascara-{rosa,azul}-v1.png` → `static/tenants/gd/masks/{rosa,azul}/quadrado.png`
+grep -nE "['\"](gd|rosa|azul)['\"]" static/js/editor.js
 
-**Interfaces:**
-- Consumes: contrato validado por `validateConfig` (Task 7).
-- Produces: três diretórios de tenant. `gd` habilita apenas `quadrado`; `joao` habilita os três formatos com um único template.
+esperado: zero.
 
-- [ ] **Step 1: Mover as artes do GD para o tenant**
+Adicionar teste de bootstrap com fetch/carregamento deliberadamente atrasado ou inspeção via CDP para provar:
 
-```bash
-mkdir -p static/tenants/gd/masks/rosa static/tenants/gd/masks/azul
-git mv static/img/mascara-rosa-v1.png static/tenants/gd/masks/rosa/quadrado.png
-git mv static/img/mascara-azul-v1.png static/tenants/gd/masks/azul/quadrado.png
-```
+durante carga → appLoading visível
+antes da máscara default pronta → appShell oculto
+sucesso → appLoading oculto + appShell visível
+erro → appLoading oculto + tenantError visível
+raiz → appLoading oculto + landing visível
 
-- [ ] **Step 2: Escrever `static/tenants/gd/config.json`**
+Aceite
 
-```json
+/ mostra landing;
+
+/joao inicia;
+
+/gd inicia;
+
+rede lenta nunca produz tela branca;
+
+appShell só aparece após máscara default pronta;
+
+máscara default está ready antes de download;
+
+nenhum cliente/template no core;
+
+19 WYSIWYG continuam verdes.
+
+Commit
+
+refactor: core multi-tenant com bootstrap atomico
+
+Task 11 — Comportamento de troca sem sleeps
+
+Objetivo
+
+Provar explicitamente as duas regras de UX sem depender de waits arbitrários.
+
+Dependências
+
+Task 10.
+
+Alterar
+
+tests/harness.js
+
+tests/run.js
+
+tests/compare.py somente se a comparação visual continuar sendo a forma mais simples.
+
+Não usar
+
+sleep(400)
+setTimeout arbitrário
+
+Esperar:
+
+data-mask-state === "ready"
+
+e estado do seletor.
+
+Implementation Lock
+
+Os testes não podem inferir “pronto” por tempo.
+
+Helper canônico:
+
+async function waitForMaskReady(cdp, timeoutMs) {
+  await waitForCondition(
+    cdp,
+    `document.querySelector("canvas")?.dataset.maskState === "ready"`,
+    timeoutMs
+  );
+}
+
+Após clicar em template ou formato:
+
+esperar aria-checked correto
+→ esperar maskState ready
+→ somente então capturar preview/estado
+
+Não usar sleep(400) ou timeout equivalente.
+
+A implementação de produção deve obedecer:
+
+setTemplate:
+  não toca em person
+  muda template
+  invalida resultado
+  inicia applyMask do mesmo formato
+  trata rejeição com catch + toast
+
+setFormat:
+  muda formato/dims
+  reset rotation
+  autoFit
+  invalida resultado
+  inicia applyMask do novo formato
+  trata rejeição com catch + toast
+
+Somente initEditor() aguarda applyMask() diretamente, porque a máscara default precisa participar do fail-closed de inicialização.
+
+Teste A — template preserva
+
+Rodar contra:
+
+/gd
+
+porque possui dois templates reais:
+
+rosa → azul
+
+No mesmo quadrado.
+
+Comparar pessoa/enquadramento antes/depois, ignorando a região da moldura.
+
+Não trocar formato neste teste.
+
+Teste B — formato reseta
+
+Rodar contra:
+
+/joao
+
+porque possui:
+
+quadrado
+feed
+story
+
+Fluxo:
+
+quadrado
+→ alterar zoom/posição/rotação
+→ story
+
+Confirmar:
+
+dimensões mudaram;
+
+rotação volta ao default;
+
+estado foi autoFit;
+
+não houve restore de coordenadas anteriores.
+
+Aceite
+
+As duas regras passam de forma independente.
+
+Commit
+
+test: regras deterministicas de troca
+
+FASE 4 — Validação, escala e isolamento
+
+Task 12 — Testes de tenant, escala e isolamento
+
+Objetivo
+
+Validar isolamento entre clientes e comportamento com diferentes quantidades de templates.
+
+Dependências
+
+Task 11.
+
+Alterar
+
+tests/harness.js
+
+tests/run.js
+
+tests/tenant.test.js quando for teste puramente estrutural.
+
+Casos de rota
+
+/gd → sucesso
+/joao → sucesso
+/inexistente → erro
+/admin → erro reservado
+/Joao → erro slug
+/ → landing
+
+Isolamento bidirecional
+
+Validar:
+
+/joao não requisita /tenants/gd/
+/gd não requisita /tenants/joao/
+
+Também comparar:
+
+título;
+
+primaryColor;
+
+templates;
+
+formatos.
+
+Quantidade de templates
+
+Não criar novo tenant físico apenas para isso.
+
+Usar config sintético/unitário ou fixture temporária para validar:
+
+1 template
+2 templates
+5 templates
+
+Se útil, testar 10 sem pixel matrix.
+
+Objetivo: garantir que core/renderização não dependa de quantidade fixa.
+
+Config inválido
+
+Cobrir:
+
+campo obrigatório ausente;
+
+formato inválido;
+
+formato duplicado;
+
+template duplicado;
+
+template id inválido;
+
+asset parcial;
+
+default inexistente;
+
+cor inválida;
+
+asset path inseguro.
+
+Asset inexistente
+
+validator de tenant precisa falhar;
+
+runtime default inexistente precisa falhar fechado;
+
+asset lazy inexistente precisa gerar erro controlado e manter download bloqueado;
+
+asset lazy inexistente deve exibir toast apropriado;
+
+não pode ocorrer unhandledrejection.
+
+No teste browser, registrar temporariamente:
+
+window.__unhandledRejections = [];
+window.addEventListener("unhandledrejection", (event) => {
+  window.__unhandledRejections.push(String(event.reason));
+});
+
+Após forçar falha de template/formato não-default, o array deve permanecer vazio.
+
+Aceite
+
+Unitários + integração verdes, isolamento nos dois sentidos.
+
+Commit
+
+test: tenant escala fail-closed e isolamento
+
+Task 13 — Verificador de migração
+
+Objetivo
+
+Criar guardrails estáticos para impedir regressões arquiteturais.
+
+Dependências
+
+Task 12.
+
+Alterar
+
+tests/verify_migration.py
+
+Verificações
+
+Core sem tenant
+
+Buscar somente literais delimitados no core:
+
+"gd"
+"rosa"
+"azul"
+
+Não procurar substring solta.
+
+Não buscar em tenants/tests onde são legítimos.
+
+Sem SIZE fixo
+
+const SIZE proibido;
+
+dimensões oficiais só em FORMAT_DIMS.
+
+A checagem deve ser robusta o suficiente para não reprovar texto de UI legítimo como nome de download; prefira parsing/regex do bloco quando necessário em vez de “qualquer linha contendo 1080”.
+
+Sem backend antigo em runtime
+
+Proibir no app:
+
+/api/render
+FormData usado para render server-side
+fetch de endpoint de render
+
+Config não executa código
+
+Proibir:
+
+eval(
+new Function(
+
+e qualquer import dinâmico derivado de config.
+
+Core sem caminhos de tenant
+
+editor.js não deve montar /static/tenants/....
+
+Isso pertence a tenant.js.
+
+Aceite
+
+python tests/verify_migration.py verde.
+
+Commit
+
+test: guardrails de arquitetura multi-tenant
+
+FASE 5 — Cloudflare
+
+Task 14 — Workers Static Assets + public/
+
+Objetivo
+
+Preparar estrutura de produção sem executar deploy.
+
+Dependências
+
+Task 13.
+
+Esta task é uma migração de caminhos
+
+Antes do commit, fazer inventário de todos os consumidores de:
+
+index.html
+static/
+
+e atualizar todos no mesmo commit.
+
+Mover
+
+index.html → public/index.html
+static/ → public/static/
+
+Criar
+
+public/_headers
+
+wrangler.toml
+
+requirements-dev.txt se Python/Pillow continuar necessário somente para testes.
+
+Remover legado de runtime
+
+Se ainda existirem e não forem usados por testes:
+
+app.py;
+
+Dockerfile;
+
+Procfile;
+
+vercel.json;
+
+.vercelignore.
+
+requirements.txt de produção deve ser removido/substituído por requirements-dev.txt se suas únicas dependências restantes forem ferramentas de teste como Pillow.
+
+Não remover Python/Pillow dos testes.
+
+Atualizar obrigatoriamente
+
+tests/server.js → default public/;
+
+tests/tenant.test.js → import de public/static/js/tenant.js;
+
+tests/validate-tenant.js → raiz public/static/tenants;
+
+tests/verify_migration.py → public/static/js;
+
+qualquer script/comando que leia static/ diretamente.
+
+Antes do commit:
+
+grep -R "static/js\|static/tenants\|index.html" tests -n
+
+revisar cada ocorrência conscientemente.
+
+wrangler.toml
+
+name = "avatar"
+compatibility_date = "2026-08-18"
+
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+
+_headers
+
+Incluir no mínimo:
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+
+/static/tenants/:slug/config.json
+  Cache-Control: public, max-age=0, must-revalidate
+
+JS/CSS também podem permanecer revalidáveis.
+
+Não aplicar immutable ao config.json.
+
+CSP
+
+Testar efetivamente:
+
+upload;
+
+preview;
+
+object URLs;
+
+download;
+
+máscaras;
+
+logo.
+
+Não endurecer CSP além do que o app testado suporta nesta entrega.
+
+Testes
+
+Após mover:
+
+node tests/server.js 8000
+node --test tests/tenant.test.js
+node tests/validate-tenant.js gd
+node tests/validate-tenant.js joao
+node tests/run.js http://127.0.0.1:8000/joao
+python tests/verify_migration.py
+
+Aceite
+
+Tudo verde depois da mudança para public/.
+
+Commit
+
+chore: preparar workers static assets
+
+FASE 6 — Documentação
+
+Task 15 — README e onboarding
+
+Objetivo
+
+Transformar cadastro de cliente em procedimento operacional replicável.
+
+Dependências
+
+Task 14.
+
+Alterar
+
+README.md
+
+Seções
+
+O que é Avatar.
+
+Arquitetura.
+
+gd como tenant comum, sem tratamento especial.
+
+Estrutura de diretórios.
+
+Como rodar localmente.
+
+Formatos oficiais.
+
+Contrato config.json.
+
+Como adicionar cliente.
+
+Como adicionar template.
+
+Como habilitar formato.
+
+Version/cache.
+
+Segurança.
+
+Testes.
+
+Cloudflare Workers Static Assets.
+
+Deploy futuro — deixar claro que não foi executado.
+
+Onboarding correto após public/
+
+1. copiar public/static/tenants/_template para public/static/tenants/<slug>
+2. definir slug
+3. editar config
+4. trocar logo
+5. adicionar templates
+6. adicionar um asset por formato habilitado em cada template
+7. revisar defaults
+8. incrementar version se asset mudou
+9. rodar node tests/validate-tenant.js <slug>
+10. rodar testes focados
+11. commit/push
+
+Não usar o caminho antigo static/tenants/_template.
+
+Checklist
+
+Incluir:
+
+slug;
+
+config válido;
+
+assets existentes;
+
+logo;
+
+templates;
+
+formatos;
+
+defaults;
+
+upload;
+
+zoom;
+
+rotação;
+
+export;
+
+isolamento;
+
+version.
+
+Remover documentação obsoleta
+
+Não deixar instrução operacional de:
+
+Flask;
+
+Gunicorn;
+
+/api/render;
+
+Vercel;
+
+backend Python.
+
+Pode existir apenas menção histórica claramente marcada, se realmente útil.
+
+Aceite
+
+Uma pessoa técnica consegue cadastrar novo tenant sem editar editor.js.
+
+Commit
+
+docs: onboarding multi-tenant do avatar
+
+FASE 7 — Gate final
+
+Task 16 — Gate final de entrega
+
+Objetivo
+
+Garantir que 100% significa feature validada, não apenas “último arquivo editado”.
+
+Dependências
+
+Tasks 1–15.
+
+Não implementar feature nova
+
+Se algo falhar:
+
+corrigir a task responsável;
+
+se necessário, reabrir a task correspondente;
+
+não esconder correção dentro do gate.
+
+Rodar
+
+Unitários
+
+node --test tests/tenant.test.js
+
+e demais unitários existentes.
+
+Validator
+
+node tests/validate-tenant.js gd
+node tests/validate-tenant.js joao
+
+WYSIWYG
+
+node tests/run.js http://127.0.0.1:8000/joao
+
+Esperado:
+
+13 quadrado
+3 feed
+3 story
+race quadrado/story
+0 pixels diferentes
+
+Tenant real de dois templates
+
+Executar teste focado de:
+
+/gd
+rosa → azul
+
+confirmando preservação de enquadramento.
+
+Formato
+
+Executar teste focado de:
+
+/joao
+quadrado → story
+
+confirmando reset + autoFit.
+
+Guardrails
+
+python tests/verify_migration.py
+
+Rotas
+
+Confirmar:
+
+/             landing
+/gd           editor
+/joao         editor
+/inexistente  erro
+/admin        erro
+/Joao         erro
+
+Segurança/runtime
+
+Confirmar:
+
+sem request /api/*;
+
+sem asset cross-tenant;
+
+CSP não quebra preview/download;
+
+default mask ausente falha fechado;
+
+lazy mask ausente bloqueia download;
+
+nenhum segredo em configs.
+
+Git
+
+git status --short
+
+Esperado: apenas alterações conscientemente previstas; idealmente limpo após commit.
+
+Critérios finais
+
+/gd e /joao usam o mesmo core.
+
+gd não possui regra especial no core.
+
+nenhum tenant/template hardcoded em editor.js.
+
+1, 2 e 5 templates funcionam.
+
+quadrado 1080×1080.
+
+feed 1080×1350.
+
+story 1080×1920.
+
+WYSIWYG pixel-perfect.
+
+EXIF preservado.
+
+zoom preservado.
+
+rotação preservada.
+
+race de export preservada.
+
+race de máscara protegida.
+
+nenhuma falha de máscara não-default gera unhandled promise rejection.
+
+loading global evita tela branca e app parcial.
+
+app só aparece após máscara default pronta.
+
+template preserva enquadramento.
+
+formato reseta + autoFit.
+
+configs inválidos falham fechado.
+
+isolamento bidirecional.
+
+validator confirma assets reais.
+
+landing funciona.
+
+public/ é única raiz publicável.
+
+Workers Static Assets preparado.
+
+backend legado removido.
+
+README correto.
+
+deploy não executado.
+
+Conclusão
+
+Somente após tudo verde:
+
+Progresso: [////////////////////////////////] 100%
+Tasks: 16/16
+
+Commit
+
+test: gate final multi-tenant e multi-formato
+
+O arquivo deste plano precisa ser incluído no mesmo commit com Task 16 marcada como concluída.
+
+8. Política de execução para agentes
+
+Para economizar tokens:
+
+Antes de uma task
+
+Ler apenas:
+
+Global Constraints;
+
+Invariante de executabilidade;
+
+Regra de progresso;
+
+task atual;
+
+interfaces/arquivos diretamente consumidos.
+
+Não reler o plano inteiro salvo se houver conflito.
+
+Durante
+
+se a task possuir Implementation Lock, seguir sua sequência semântica obrigatória;
+
+não rederivar outra arquitetura para o mesmo comportamento;
+
+alterar somente arquivos da task;
+
+exceção: correção mínima indispensável para manter executabilidade;
+
+não refatorar “por oportunidade”;
+
+não introduzir dependência nova sem necessidade;
+
+não reescrever lógica validada;
+
+executar teste focado primeiro;
+
+suíte ampla somente quando a task exigir.
+
+Depois
+
+verificar aceite;
+
+rodar testes;
+
+atualizar task/barra;
+
+incluir plano no commit;
+
+responder em até 3 linhas.
+
+Quando descobrir problema no plano
+
+Não improvisar uma arquitetura nova.
+
+Procedimento:
+
+parar a task
+→ registrar conflito objetivo
+→ propor menor correção de plano
+→ corrigir ordem/contrato
+→ só então continuar
+
+Exceção: correção trivial dentro do escopo que não muda contrato.
+
+9. Fora de escopo
+
+Não implementar:
+
+painel admin;
+
+cadastro em banco;
+
+autenticação;
+
+login;
+
+cobrança;
+
+API;
+
+KV;
+
+D1;
+
+R2;
+
+domínio próprio por tenant;
+
+formato customizado;
+
+editor de template;
+
+persistência de enquadramento por formato;
+
+deploy Cloudflare real.
+
+A decisão de não persistir enquadramento por formato é consciente:
+
+quadrado → story → quadrado
+
+executa novo autoFit ao voltar.
+
+Se usuários reais considerarem isso ruim, transformByFormat poderá ser uma feature separada no futuro.
+
+10. Contrato final de exemplo
+
 {
   "slug": "gd",
   "version": "1",
   "brand": {
     "name": "GD",
     "title": "Monte sua foto com GD!",
-    "description": "Escolha um modelo e envie uma foto já com fundo branco, transparente ou recortada. Depois é só ajustar o enquadramento.",
+    "description": "Escolha um modelo e personalize sua foto.",
     "primaryColor": "#ff4fa3",
     "secondaryColor": "#2458ff",
     "logo": "logo.png"
@@ -1475,1213 +2847,27 @@ git mv static/img/mascara-azul-v1.png static/tenants/gd/masks/azul/quadrado.png
     "format": "quadrado"
   }
 }
-```
 
-`formats` traz apenas `quadrado` porque só existem artes quadradas. Quando o designer entregar feed e story, acrescentar os formatos ao array, subir os arquivos em `masks/<template>/` e incrementar `version`.
+Este exemplo pertence ao tenant gd; não constitui regra do core.
 
-- [ ] **Step 3: Criar o tenant fictício `joao` com os três formatos**
+11. Definição de sucesso
 
-```bash
-mkdir -p static/tenants/joao/masks/principal
-cp tests/fixtures/masks/quadrado.png static/tenants/joao/masks/principal/quadrado.png
-cp tests/fixtures/masks/feed.png static/tenants/joao/masks/principal/feed.png
-cp tests/fixtures/masks/story.png static/tenants/joao/masks/principal/story.png
-```
+A implementação estará pronta quando:
 
-`static/tenants/joao/config.json`:
+novo cliente
+     ↓
+copiar _template
+     ↓
+editar config
+     ↓
+adicionar logo/templates/assets
+     ↓
+validar
+     ↓
+commit/push
+     ↓
+avatar.app.br/<slug>
 
-```json
-{
-  "slug": "joao",
-  "version": "1",
-  "brand": {
-    "name": "João",
-    "title": "Monte sua foto com João!",
-    "description": "Escolha um modelo e personalize sua foto.",
-    "primaryColor": "#2458ff",
-    "secondaryColor": "#ffffff",
-    "logo": "logo.png"
-  },
-  "formats": ["quadrado", "feed", "story"],
-  "templates": [
-    {
-      "id": "principal",
-      "name": "Modelo Principal",
-      "assets": {
-        "quadrado": "masks/principal/quadrado.png",
-        "feed": "masks/principal/feed.png",
-        "story": "masks/principal/story.png"
-      }
-    }
-  ],
-  "defaults": {
-    "template": "principal",
-    "format": "quadrado"
-  }
-}
-```
+sem qualquer alteração no editor.js.
 
-`joao` prova isolamento e é o único tenant com os três formatos — por isso a matriz WYSIWYG das tasks seguintes roda contra `/joao`, não contra `/gd`.
-
-- [ ] **Step 4: Criar o template oficial de novo cliente**
-
-```bash
-mkdir -p static/tenants/_template/masks/principal
-cp tests/fixtures/masks/quadrado.png static/tenants/_template/masks/principal/quadrado.png
-cp tests/fixtures/masks/feed.png static/tenants/_template/masks/principal/feed.png
-cp tests/fixtures/masks/story.png static/tenants/_template/masks/principal/story.png
-```
-
-`static/tenants/_template/config.json`:
-
-```json
-{
-  "slug": "_template",
-  "version": "1",
-  "brand": {
-    "name": "Nome do Cliente",
-    "title": "Monte sua foto com o Cliente!",
-    "description": "Escolha um modelo e personalize sua foto.",
-    "primaryColor": "#2458ff",
-    "secondaryColor": "#ffffff",
-    "logo": "logo.png"
-  },
-  "formats": ["quadrado", "feed", "story"],
-  "templates": [
-    {
-      "id": "principal",
-      "name": "Modelo Principal",
-      "assets": {
-        "quadrado": "masks/principal/quadrado.png",
-        "feed": "masks/principal/feed.png",
-        "story": "masks/principal/story.png"
-      }
-    }
-  ],
-  "defaults": {
-    "template": "principal",
-    "format": "quadrado"
-  }
-}
-```
-
-O slug `_template` não casa com `^[a-z0-9-]+$`, então a pasta nunca é servível como cliente real — é modelo de cópia, não tenant navegável.
-
-- [ ] **Step 5: Gerar as logos**
-
-```bash
-python - <<'PY'
-from PIL import Image, ImageDraw
-
-LOGOS = [
-    ("gd", "GD", (255, 79, 163)),
-    ("joao", "JOAO", (36, 88, 255)),
-    ("_template", "CLIENTE", (120, 120, 120)),
-]
-
-for slug, texto, cor in LOGOS:
-    img = Image.new("RGBA", (240, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, 239, 63], outline=cor, width=3)
-    d.text((16, 24), texto, fill=cor)
-    img.save(f"static/tenants/{slug}/logo.png")
-PY
-```
-
-Substituir `static/tenants/gd/logo.png` pela logo real do cliente quando ela estiver disponível.
-
-- [ ] **Step 6: Validar os três configs contra o schema**
-
-```bash
-node --input-type=module -e "
-import { validateConfig } from './static/js/tenant.js';
-import { readFileSync } from 'node:fs';
-for (const slug of ['gd', 'joao']) {
-  const raw = JSON.parse(readFileSync(\`static/tenants/\${slug}/config.json\`, 'utf8'));
-  validateConfig(raw, slug);
-  console.log(slug, 'OK');
-}
-"
-```
-Expected: `gd OK` e `joao OK`
-
-O `_template` não passa por essa validação de propósito: seu slug tem underscore e é recusado por construção.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add static/tenants static/img
-git commit -m "feat: tenants gd, joao e _template"
-```
-
----
-
-# FASE 2 — Templates dinâmicos (virada)
-
-### Task 10: Virada — initEditor, templates dinâmicos e bootstrap
-
-Remove `rosa` e `azul` do core e liga o editor ao tenant. Task atômica: separar HTML, `initEditor` e `bootstrap` deixaria o produto quebrado entre commits.
-
-**Files:**
-- Modify: `static/js/editor.js` (IIFE → módulo com `initEditor`), `index.html` (containers, tela de erro, script), `static/css/style.css` (variáveis de marca)
-- Create: `static/js/bootstrap.js`
-
-**Interfaces:**
-- Consumes: `readSlug`, `loadTenant`, `TenantError` de `tenant.js` (Tasks 6-7); `renderFormats`, `syncFormatChips`, `setFormat` das Tasks 2-3.
-- Produces:
-
-```js
-// editor.js
-export function initEditor({ slug, templates, formats, defaultTemplate, defaultFormat })
-```
-
-`templates`: `Array<{ id, name, assets: Record<formatId, string> }>` com URLs já resolvidas e versionadas. `formats`: `Array<formatId>` na ordem de exibição. Internamente expõe `setTemplate(templateId)` (comportamento definido na Task 11), `applyMask(templateId, formatId)` e `renderTemplates()`.
-
-- [ ] **Step 1: Converter o arquivo em módulo**
-
-Em `static/js/editor.js`, trocar a abertura:
-
-```js
-(() => {
-  "use strict";
-```
-
-por:
-
-```js
-"use strict";
-
-export function initEditor({ slug, templates, formats, defaultTemplate, defaultFormat }) {
-```
-
-E o fechamento:
-
-```js
-})();
-```
-
-por:
-
-```js
-}
-```
-
-Remover as instruções finais de inicialização da IIFE (`applyMaskAccent();`, `renderFormats(Object.keys(FORMAT_DIMS));`, `draw();`) — a inicialização definitiva entra no Step 5.
-
-- [ ] **Step 2: Substituir o estado de máscara por estado de template**
-
-Remover as referências fixas: a linha `const maskRadios = [...]`, o objeto `maskImages`, o objeto `maskReady` e as declarações provisórias `let tenantSlug = "cliente";` / `let currentTemplateId = "modelo";` criadas na Task 4.
-
-No lugar, acrescentar:
-
-```js
-  const templateGrid = document.getElementById("templateGrid");
-
-  // Cache de imagem por par template+formato. Um tenant com 10 templates e
-  // 3 formatos tem 30 artes; carregar tudo de uma vez desperdiça banda em
-  // celular, então a carga é sob demanda e o resultado fica em cache.
-  const maskCache = new Map();
-  const templateById = new Map(templates.map((template) => [template.id, template]));
-
-  let currentMask = null;
-  let tenantSlug = slug;
-  let currentTemplateId = defaultTemplate;
-
-  function maskKey(templateId, formatId) {
-    return `${templateId}/${formatId}`;
-  }
-```
-
-Remover também `let selectedMask = ...` e qualquer uso remanescente dele.
-
-- [ ] **Step 3: Carregar a máscara sob demanda**
-
-Substituir `currentMaskImage()` e `applyMaskAccent()` por:
-
-```js
-  function loadMask(templateId, formatId) {
-    const key = maskKey(templateId, formatId);
-    const cached = maskCache.get(key);
-    if (cached) return cached;
-
-    const src = templateById.get(templateId)?.assets?.[formatId];
-    if (!src) {
-      return Promise.reject(new Error(`asset ausente para ${key}`));
-    }
-
-    const promise = new Promise((resolve, reject) => {
-      const image = new Image();
-      image.crossOrigin = "anonymous";
-      image.addEventListener("load", () => resolve(image));
-      image.addEventListener("error", () => reject(new Error(`falha ao carregar ${src}`)));
-      image.src = src;
-    });
-
-    maskCache.set(key, promise);
-    return promise;
-  }
-
-  async function applyMask(templateId, formatId) {
-    try {
-      const image = await loadMask(templateId, formatId);
-      // Outra troca pode ter acontecido durante o await; descartar se a
-      // seleção mudou, pelo mesmo motivo do versionamento de exportação.
-      if (templateId !== currentTemplateId || formatId !== currentFormat) return;
-      currentMask = image;
-    } catch (error) {
-      if (templateId !== currentTemplateId || formatId !== currentFormat) return;
-      currentMask = null;
-      showToast("Não foi possível carregar a arte deste modelo.", "error");
-    }
-    draw();
-  }
-```
-
-- [ ] **Step 4: Usar `currentMask` no `draw()`**
-
-Substituir o bloco de máscara dentro de `draw()`:
-
-```js
-    const mask = currentMaskImage();
-    if (mask && maskReady[selectedMask]) {
-      ctx.drawImage(mask, 0, 0, dims.width, dims.height);
-    }
-```
-
-por:
-
-```js
-    if (currentMask) {
-      ctx.drawImage(currentMask, 0, 0, dims.width, dims.height);
-    }
-```
-
-E remover o bloco `Object.entries(maskImages).forEach(...)` do final do arquivo, que registrava os listeners de `load`/`error` das imagens fixas.
-
-- [ ] **Step 5: Renderizar os cards de template e inicializar**
-
-Substituir o bloco de listeners de `maskRadios` por:
-
-```js
-  function renderTemplates() {
-    templateGrid.replaceChildren();
-
-    templates.forEach((template) => {
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "template-card";
-      card.dataset.template = template.id;
-      card.setAttribute("role", "radio");
-      card.setAttribute("aria-checked", String(template.id === currentTemplateId));
-
-      const preview = document.createElement("img");
-      preview.className = "template-preview-img";
-      preview.src = template.assets[defaultFormat];
-      preview.alt = `Prévia do ${template.name}`;
-      preview.loading = "lazy";
-
-      const nome = document.createElement("span");
-      nome.className = "template-name";
-      nome.textContent = template.name;
-
-      card.append(preview, nome);
-      card.addEventListener("click", () => {
-        if (isBusy || template.id === currentTemplateId) return;
-        setTemplate(template.id);
-      });
-
-      templateGrid.append(card);
-    });
-  }
-
-  function syncTemplateCards() {
-    [...templateGrid.querySelectorAll(".template-card")].forEach((card) => {
-      card.setAttribute("aria-checked", String(card.dataset.template === currentTemplateId));
-    });
-  }
-
-  // Comportamento completo definido na Task 11. Aqui basta trocar a arte.
-  function setTemplate(templateId) {
-    if (!templateById.has(templateId)) return;
-    currentTemplateId = templateId;
-    syncTemplateCards();
-    invalidateResult();
-    applyMask(currentTemplateId, currentFormat);
-  }
-```
-
-E, ao final do corpo de `initEditor`, antes do fechamento:
-
-```js
-  renderTemplates();
-  renderFormats(formats);
-  setFormat(defaultFormat);
-  applyMask(currentTemplateId, currentFormat);
-```
-
-Acrescentar também, ao final de `setFormat()`, a recarga da arte do formato novo:
-
-```js
-    applyMask(currentTemplateId, currentFormat);
-```
-
-- [ ] **Step 6: Reescrever o HTML**
-
-Em `index.html`:
-
-Trocar o conteúdo de `.template-grid` por um container vazio:
-
-```html
-      <div class="template-grid" id="templateGrid" role="radiogroup" aria-label="Modelos de campanha"></div>
-```
-
-Remover as tags `<img id="maskRosa">` e `<img id="maskAzul">`.
-
-Remover `data-mask="rosa"` de `<body>`.
-
-Envolver o app e acrescentar a tela de erro, logo depois de `<body>`:
-
-```html
-  <section class="tenant-error" id="tenantError" hidden>
-    <h1 id="tenantErrorTitle">Cliente não encontrado</h1>
-    <p id="tenantErrorText">Verifique o endereço e tente novamente.</p>
-  </section>
-
-  <main class="app-shell" id="appShell" hidden>
-```
-
-Dar ids aos textos de marca dentro de `.app-header`:
-
-```html
-      <img class="brand-logo" id="brandLogo" alt="" hidden>
-      <h1 id="brandTitle">Monte sua foto</h1>
-      <p id="brandDescription"></p>
-```
-
-Trocar o carregamento do script:
-
-```html
-  <script type="module" src="/static/js/bootstrap.js"></script>
-```
-
-- [ ] **Step 7: Declarar as variáveis de marca no CSS**
-
-Em `static/css/style.css`, no bloco `:root`:
-
-```css
-  --brand-primary: #ff4fa3;
-  --brand-secondary: #ffffff;
-```
-
-E acrescentar:
-
-```css
-.brand-logo {
-  max-height: 48px;
-  width: auto;
-  margin-bottom: 12px;
-}
-
-.tenant-error {
-  max-width: 460px;
-  margin: 18vh auto;
-  padding: 0 24px;
-  text-align: center;
-}
-
-.template-preview-img {
-  width: 100%;
-  border-radius: 12px;
-  display: block;
-}
-```
-
-Trocar as cores de destaque fixas por `var(--brand-primary)` e remover os seletores `[data-mask="rosa"]` / `[data-mask="azul"]`, que deixam de existir. Localizar as ocorrências com:
-
-Run: `grep -n "#ff4fa3\|#2458ff\|\[data-mask" static/css/style.css`
-
-- [ ] **Step 8: Implementar `bootstrap.js`**
-
-Criar `static/js/bootstrap.js`:
-
-```js
-"use strict";
-
-import { readSlug, loadTenant, TenantError } from "./tenant.js";
-import { initEditor } from "./editor.js";
-
-const MENSAGENS = {
-  slug_invalido: "Cliente não encontrado",
-  slug_reservado: "Cliente não encontrado",
-  tenant_inexistente: "Cliente não encontrado",
-  padrao: "Não foi possível carregar esta configuração.",
-};
-
-function mostrarErro(code) {
-  // Detalhe técnico fica no console; o usuário final vê texto controlado.
-  const titulo = MENSAGENS[code] || MENSAGENS.padrao;
-  document.getElementById("tenantErrorTitle").textContent = titulo;
-  document.getElementById("tenantError").hidden = false;
-  document.getElementById("appShell").hidden = true;
-  document.title = titulo;
-}
-
-function aplicarMarca(brand) {
-  const root = document.documentElement;
-  root.style.setProperty("--brand-primary", brand.primaryColor);
-  root.style.setProperty("--brand-secondary", brand.secondaryColor);
-
-  document.title = brand.title;
-  document.getElementById("brandTitle").textContent = brand.title;
-  document.getElementById("brandDescription").textContent = brand.description;
-
-  const logo = document.getElementById("brandLogo");
-  if (brand.logo) {
-    // Logo ausente não derruba o editor: some da interface e segue o jogo.
-    logo.addEventListener("error", () => {
-      logo.hidden = true;
-    });
-    logo.src = brand.logo;
-    logo.alt = brand.name;
-    logo.hidden = false;
-  }
-}
-
-async function bootstrap() {
-  let slug;
-  try {
-    slug = readSlug(window.location.pathname);
-  } catch (error) {
-    console.error(error);
-    mostrarErro(error.code);
-    return;
-  }
-
-  if (slug === null) {
-    // Raiz do domínio não resolve tenant. Placeholder chega na Task 12.
-    document.getElementById("appShell").hidden = true;
-    const landing = document.getElementById("landing");
-    if (landing) landing.hidden = false;
-    return;
-  }
-
-  let tenant;
-  try {
-    tenant = await loadTenant(slug);
-  } catch (error) {
-    console.error(error);
-    mostrarErro(error instanceof TenantError ? error.code : "padrao");
-    return;
-  }
-
-  aplicarMarca(tenant.brand);
-  document.getElementById("appShell").hidden = false;
-
-  initEditor({
-    slug: tenant.slug,
-    templates: tenant.templates,
-    formats: tenant.formats,
-    defaultTemplate: tenant.defaults.template,
-    defaultFormat: tenant.defaults.format,
-  });
-}
-
-bootstrap();
-```
-
-- [ ] **Step 9: Confirmar que o core não conhece cliente nem template**
-
-Run: `grep -nE "['\"](gd|rosa|azul)['\"]" static/js/editor.js`
-Expected: nenhuma saída
-
-- [ ] **Step 10: Rodar a matriz completa contra o tenant com três formatos**
-
-Run:
-```bash
-node tests/server.js 8000 &
-sleep 1
-node tests/run.js http://127.0.0.1:8000/joao
-```
-Expected: `OK: 19 casos, corrida em 2 formatos, WYSIWYG e rede verificados`
-
-- [ ] **Step 11: Commit**
-
-```bash
-git add static/js/editor.js static/js/bootstrap.js index.html static/css/style.css
-git commit -m "refactor: initEditor com templates dinamicos e bootstrap de tenant"
-```
-
----
-
-### Task 11: Regra de preservação de enquadramento
-
-Trocar template preserva. Trocar formato reseta. Comportamento verificado por teste.
-
-**Files:**
-- Modify: `static/js/editor.js` (`setTemplate`), `tests/harness.js`, `tests/run.js`, `tests/compare.py`
-
-**Interfaces:**
-- Consumes: `setTemplate`, `applyMask`, `syncTemplateCards` da Task 10; `selectFormat` da Task 5.
-- Produces: `captureSwitchBehavior(cdp, {templateB, formatB}, timeoutMs)` no harness, devolvendo `{antes, aposTemplate, aposFormato}` (buffers PNG); modo `--centro` em `compare.py` devolvendo `{centroIgual, pixelsDiferentes}` em JSON.
-
-- [ ] **Step 1: Completar `setTemplate()` com o toast**
-
-Substituir `setTemplate()` por:
-
-```js
-  // Trocar template NÃO toca em person: a arte sobreposta muda, o
-  // enquadramento escolhido pelo usuário permanece. Contrapartida
-  // deliberada de setFormat(), que sempre reseta.
-  function setTemplate(templateId) {
-    const template = templateById.get(templateId);
-    if (!template) return;
-
-    currentTemplateId = templateId;
-    syncTemplateCards();
-    invalidateResult();
-    applyMask(currentTemplateId, currentFormat);
-    showToast(`${template.name} selecionado.`);
-  }
-```
-
-- [ ] **Step 2: Implementar o modo `--centro` no comparador**
-
-Em `tests/compare.py`, acrescentar:
-
-```python
-def comparar_centro(caminho_a: str, caminho_b: str) -> dict:
-    """Compara só o miolo, onde a moldura não desenha.
-
-    Trocar de template muda a arte nas bordas de propósito. O que não pode
-    mudar é a pessoa — e ela vive no centro.
-    """
-    from PIL import Image, ImageChops
-
-    with Image.open(caminho_a) as a, Image.open(caminho_b) as b:
-        a = a.convert("RGB")
-        b = b.convert("RGB")
-        if a.size != b.size:
-            return {"centroIgual": False, "motivo": "dimensoes diferentes"}
-
-        w, h = a.size
-        caixa = (w // 4, h // 4, w - w // 4, h - h // 4)
-        diff = ImageChops.difference(a.crop(caixa), b.crop(caixa))
-        diferentes = sum(1 for pixel in diff.getdata() if max(pixel) > 6)
-
-    return {"centroIgual": diferentes == 0, "pixelsDiferentes": diferentes}
-```
-
-E, no despacho de argumentos, antes do fluxo padrão:
-
-```python
-    if sys.argv[1] == "--centro":
-        print(json.dumps(comparar_centro(sys.argv[2], sys.argv[3])))
-        raise SystemExit(0)
-```
-
-Garantir que `import json` e `import sys` estão presentes no topo do arquivo.
-
-- [ ] **Step 3: Implementar a captura no harness**
-
-Em `tests/harness.js`, antes de `runCase`:
-
-```js
-async function captureSwitchBehavior(cdp, { templateB, formatB }, timeoutMs) {
-  const antes = await capturePreviewPng(cdp);
-
-  await cdp.send("Runtime.evaluate", {
-    expression: `document.querySelector('.template-card[data-template="${templateB}"]').click()`,
-    returnByValue: true,
-  });
-  await waitForCondition(
-    cdp,
-    `document.querySelector('.template-card[data-template="${templateB}"]').getAttribute('aria-checked') === 'true'`,
-    timeoutMs
-  );
-  // A arte carrega de forma assíncrona; sem a folga o preview pode ser
-  // capturado antes de o novo template aparecer no canvas.
-  await sleep(400);
-  const aposTemplate = await capturePreviewPng(cdp);
-
-  await selectFormat(cdp, formatB, timeoutMs);
-  await sleep(400);
-  const aposFormato = await capturePreviewPng(cdp);
-
-  return { antes, aposTemplate, aposFormato };
-}
-```
-
-Aceitar o parâmetro em `runCase`:
-
-```js
-  switchBehavior = null,
-```
-
-e, dentro do `try`, antes de `captureDownloadPng`:
-
-```js
-    if (switchBehavior) {
-      const switchState = await captureSwitchBehavior(cdp, switchBehavior, timeoutMs);
-      return { previewPng, switchState, networkRequests };
-    }
-```
-
-Exportar:
-
-```js
-module.exports = { runCase, captureSwitchBehavior };
-```
-
-- [ ] **Step 4: Escrever a asserção em `run.js`**
-
-Acrescentar o helper:
-
-```js
-function runPythonCompareCentro(a, b) {
-  const result = spawnSync(
-    process.env.PYTHON || "python",
-    [path.join(__dirname, "compare.py"), "--centro", a, b],
-    { encoding: "utf8" }
-  );
-  if (result.status !== 0) {
-    throw new Error(`comparação de enquadramento falhou: ${result.stderr}`);
-  }
-  return JSON.parse(result.stdout);
-}
-```
-
-E, antes do `console.log` final de `main()`:
-
-```js
-  process.stdout.write("\n> troca de template preserva, troca de formato reseta\n");
-  const troca = await runCase({
-    url,
-    photoPath: path.join(FIXTURES, "12mp.jpg"),
-    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
-    timeoutMs,
-    switchBehavior: { templateB: process.env.TEMPLATE_B || "principal", formatB: "story" },
-  });
-
-  const trocaDir = path.join(outDir, "troca");
-  fs.mkdirSync(trocaDir, { recursive: true });
-  const antesPath = path.join(trocaDir, "antes.png");
-  const aposTemplatePath = path.join(trocaDir, "apos-template.png");
-  fs.writeFileSync(antesPath, troca.switchState.antes);
-  fs.writeFileSync(aposTemplatePath, troca.switchState.aposTemplate);
-
-  // A pessoa tem de ocupar exatamente os mesmos pixels depois da troca de
-  // template; só a arte sobreposta muda. Comparar a região central, que a
-  // moldura não cobre, isola a pessoa da arte.
-  const enquadramento = runPythonCompareCentro(antesPath, aposTemplatePath);
-  if (!enquadramento.centroIgual) {
-    throw new Error(
-      `troca de template alterou o enquadramento (${enquadramento.pixelsDiferentes} pixels)`
-    );
-  }
-
-  // Troca de formato muda as dimensões: o reset é o comportamento correto.
-  const aposFormatoPath = path.join(trocaDir, "apos-formato.png");
-  fs.writeFileSync(aposFormatoPath, troca.switchState.aposFormato);
-```
-
-Nota: `/joao` tem um único template, então a "troca" recai sobre o mesmo id e o teste só prova que a arte recarrega sem mexer no enquadramento. Para exercitar dois templates de verdade, rodar com `TEMPLATE_B=azul` contra `/gd`.
-
-- [ ] **Step 5: Rodar nos dois tenants**
-
-Run:
-```bash
-node tests/run.js http://127.0.0.1:8000/joao
-CASES=12mp.jpg TEMPLATE_B=azul node tests/run.js http://127.0.0.1:8000/gd
-```
-Expected: ambos PASS, sem `troca de template alterou o enquadramento`
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add static/js/editor.js tests/harness.js tests/run.js tests/compare.py
-git commit -m "feat: template preserva enquadramento, formato reseta"
-```
-
----
-
-### Task 12: Raiz do domínio
-
-**Files:**
-- Modify: `index.html` (bloco `#landing`), `static/css/style.css`
-
-**Interfaces:**
-- Consumes: `bootstrap()` já trata `slug === null` e procura `#landing` (Task 10).
-- Produces: elemento `#landing`, exibido apenas na raiz.
-
-- [ ] **Step 1: Adicionar o placeholder comercial**
-
-Em `index.html`, ao lado de `#tenantError`:
-
-```html
-  <section class="landing" id="landing" hidden>
-    <h1>Avatar</h1>
-    <p>Personalize sua campanha.</p>
-    <p class="landing-soon">Em breve.</p>
-  </section>
-```
-
-- [ ] **Step 2: Estilizar**
-
-```css
-.landing {
-  max-width: 460px;
-  margin: 18vh auto;
-  padding: 0 24px;
-  text-align: center;
-}
-
-.landing-soon {
-  opacity: .6;
-}
-```
-
-- [ ] **Step 3: Verificar**
-
-Run: abrir `http://127.0.0.1:8000/`
-Expected: "Avatar / Personalize sua campanha. / Em breve." — sem editor, sem requisição a `config.json`.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add index.html static/css/style.css
-git commit -m "feat: placeholder comercial na raiz do dominio"
-```
-
----
-
-# FASE 4 — Validação e isolamento
-
-### Task 13: Testes de tenant e isolamento
-
-**Files:**
-- Modify: `tests/harness.js`, `tests/run.js`
-
-**Interfaces:**
-- Consumes: infraestrutura de Chrome do harness (`launchChrome`, `connectToPage`, `waitForCondition`, `withTimeout`, `killChromeTree`, `removeDirWithRetry`, `DEFAULT_TIMEOUT_MS`).
-- Produces: `inspectTenant({url, viewport, timeoutMs, headless})` devolvendo `{state, networkRequests}`, onde `state` é `{editorVisivel, erroVisivel, landingVisivel, erroTitulo, titulo, primaryColor, templates: string[], formats: string[]}`.
-
-- [ ] **Step 1: Implementar a inspeção de tenant**
-
-Em `tests/harness.js`:
-
-```js
-async function captureTenantState(cdp, timeoutMs) {
-  // O bootstrap é assíncrono: esperar o desfecho, sucesso ou erro.
-  await waitForCondition(
-    cdp,
-    "!!document.getElementById('appShell') && (" +
-      "!document.getElementById('appShell').hidden || " +
-      "!document.getElementById('tenantError').hidden || " +
-      "!document.getElementById('landing').hidden)",
-    timeoutMs
-  );
-
-  const expression = `
-    (function () {
-      const estilo = getComputedStyle(document.documentElement);
-      return JSON.stringify({
-        editorVisivel: !document.getElementById('appShell').hidden,
-        erroVisivel: !document.getElementById('tenantError').hidden,
-        landingVisivel: !document.getElementById('landing').hidden,
-        erroTitulo: document.getElementById('tenantErrorTitle').textContent,
-        titulo: document.title,
-        primaryColor: estilo.getPropertyValue('--brand-primary').trim(),
-        templates: [...document.querySelectorAll('.template-card')].map((c) => c.dataset.template),
-        formats: [...document.querySelectorAll('.format-chip')].map((c) => c.dataset.format),
-      });
-    })()
-  `;
-  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true });
-  return JSON.parse(result.result.value);
-}
-
-async function inspectTenant({ url, viewport, timeoutMs = DEFAULT_TIMEOUT_MS, headless = true }) {
-  const { child, port, userDataDir } = await launchChrome({ headless, viewport });
-  const networkRequests = [];
-
-  try {
-    const cdp = await connectToPage(port);
-    await cdp.send("Page.enable");
-    await cdp.send("Network.enable");
-    await cdp.send("Runtime.enable");
-    cdp.on("Network.requestWillBeSent", (params) => {
-      if (params?.request?.url) networkRequests.push(params.request.url);
-    });
-
-    const loadEventFired = cdp.once("Page.loadEventFired");
-    await cdp.send("Page.navigate", { url });
-    await withTimeout(loadEventFired, timeoutMs, `carregamento de ${url}`);
-
-    const state = await captureTenantState(cdp, timeoutMs);
-    return { state, networkRequests };
-  } finally {
-    await killChromeTree(child);
-    await removeDirWithRetry(userDataDir);
-  }
-}
-
-module.exports = { runCase, captureSwitchBehavior, inspectTenant };
-```
-
-- [ ] **Step 2: Escrever as asserções em `run.js`**
-
-Ajustar o import no topo:
-
-```js
-const { runCase, inspectTenant } = require("./harness");
-```
-
-E apontar o default da URL para o tenant com três formatos:
-
-```js
-  const [url = "http://127.0.0.1:8000/joao", outDirArg = "tests/.tmp-matrix", timeoutArg] =
-    process.argv.slice(2);
-```
-
-Antes do `console.log` final:
-
-```js
-  process.stdout.write("\n> tenants e isolamento\n");
-  const base = new URL(url).origin;
-
-  const gd = await inspectTenant({ url: `${base}/gd`, timeoutMs });
-  if (!gd.state.editorVisivel) throw new Error("/gd não inicializou o editor");
-  if (gd.state.templates.join(",") !== "rosa,azul") {
-    throw new Error(`/gd templates inesperados: ${gd.state.templates}`);
-  }
-  if (gd.state.formats.join(",") !== "quadrado") {
-    throw new Error(`/gd formatos inesperados: ${gd.state.formats}`);
-  }
-
-  const joao = await inspectTenant({ url: `${base}/joao`, timeoutMs });
-  if (!joao.state.editorVisivel) throw new Error("/joao não inicializou o editor");
-  if (joao.state.templates.join(",") !== "principal") {
-    throw new Error(`/joao templates inesperados: ${joao.state.templates}`);
-  }
-  if (joao.state.formats.join(",") !== "quadrado,feed,story") {
-    throw new Error(`/joao formatos inesperados: ${joao.state.formats}`);
-  }
-
-  // Isolamento: nenhum request de /joao pode tocar assets de outro tenant.
-  const vazamento = joao.networkRequests.filter((requestUrl) => {
-    const { pathname } = new URL(requestUrl, base);
-    return pathname.startsWith("/static/tenants/") && !pathname.startsWith("/static/tenants/joao/");
-  });
-  if (vazamento.length) {
-    throw new Error(`/joao carregou assets de outro tenant: ${vazamento.join(", ")}`);
-  }
-
-  if (gd.state.primaryColor === joao.state.primaryColor) {
-    throw new Error("tenants diferentes com a mesma cor de marca — brand não foi aplicada");
-  }
-  if (gd.state.titulo === joao.state.titulo) {
-    throw new Error("tenants diferentes com o mesmo título");
-  }
-
-  for (const rota of ["/inexistente", "/admin", "/Joao"]) {
-    const erro = await inspectTenant({ url: `${base}${rota}`, timeoutMs });
-    if (erro.state.editorVisivel) {
-      throw new Error(`${rota} inicializou o editor — fail closed violado`);
-    }
-    if (!erro.state.erroVisivel) {
-      throw new Error(`${rota} não exibiu a tela de erro`);
-    }
-  }
-
-  const raiz = await inspectTenant({ url: `${base}/`, timeoutMs });
-  if (!raiz.state.landingVisivel || raiz.state.editorVisivel) {
-    throw new Error("raiz do domínio não exibiu o placeholder comercial");
-  }
-```
-
-- [ ] **Step 3: Rodar a suíte completa**
-
-Run:
-```bash
-node tests/server.js 8000 &
-sleep 1
-node --test tests/tenant.test.js
-node tests/run.js http://127.0.0.1:8000/joao
-```
-Expected: unitários PASS; matriz com 19 casos, corrida em 2 formatos, tenants e isolamento OK
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add tests/harness.js tests/run.js
-git commit -m "test: tenants, fail closed e isolamento entre clientes"
-```
-
----
-
-### Task 14: Verificador de migração
-
-**Files:**
-- Modify: `tests/verify_migration.py`
-
-**Interfaces:**
-- Consumes: `static/js/{editor,tenant,bootstrap}.js`.
-- Produces: `verificar_core_sem_tenant()`, `verificar_sem_premissa_quadrada()`, `verificar_sem_execucao_de_config()`, registradas no `main()` existente.
-
-- [ ] **Step 1: Acrescentar as verificações**
-
-Em `tests/verify_migration.py`:
-
-```python
-import re
-
-CORE = ROOT / "static" / "js" / "editor.js"
-
-# String delimitada por aspas, não substring solta: "gd" casa dentro de
-# qualquer identificador e geraria falso positivo em código legítimo.
-NOMES_PROIBIDOS = ["gd", "rosa", "azul"]
-
-
-def verificar_core_sem_tenant() -> None:
-    fonte = CORE.read_text(encoding="utf-8")
-    for nome in NOMES_PROIBIDOS:
-        padrao = re.compile(rf"""['"]{re.escape(nome)}['"]""")
-        encontrados = padrao.findall(fonte)
-        assert not encontrados, (
-            f"editor.js contém o literal {nome!r}: cliente ou template "
-            f"hardcoded no core ({len(encontrados)} ocorrência(s))"
-        )
-
-
-def verificar_sem_premissa_quadrada() -> None:
-    fonte = CORE.read_text(encoding="utf-8")
-    assert "const SIZE" not in fonte, "editor.js ainda declara SIZE fixo"
-
-    # 1080 é legítimo dentro de FORMAT_DIMS e em lugar nenhum mais.
-    fora_do_enum = [
-        linha.strip()
-        for linha in fonte.splitlines()
-        if "1080" in linha
-        and not re.search(r"(quadrado|feed|story):\s*Object\.freeze", linha)
-    ]
-    assert not fora_do_enum, "1080 fora de FORMAT_DIMS: " + "; ".join(fora_do_enum)
-
-
-def verificar_sem_execucao_de_config() -> None:
-    """Config de tenant é dado público: nunca pode virar código."""
-    for arquivo in ["tenant.js", "bootstrap.js", "editor.js"]:
-        fonte = (ROOT / "static" / "js" / arquivo).read_text(encoding="utf-8")
-        for perigoso in ["eval(", "new Function("]:
-            assert perigoso not in fonte, f"{arquivo} usa {perigoso}"
-```
-
-Registrar as três funções na lista de verificações executadas pelo `main()`.
-
-- [ ] **Step 2: Confirmar o escopo das verificações existentes**
-
-Conferir que as checagens de `/api/render` e `FormData` continuam ativas e que a busca de nomes proibidos olha apenas para `static/js/`, nunca para `static/tenants/` nem `tests/` — onde `gd`, `rosa` e `azul` são legítimos.
-
-- [ ] **Step 3: Rodar**
-
-Run: `python tests/verify_migration.py`
-Expected: todas as verificações OK
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add tests/verify_migration.py
-git commit -m "test: verificador por literal delimitado, sem falso positivo"
-```
-
----
-
-# FASE 5 — Cloudflare
-
-### Task 15: Cloudflare Workers Static Assets
-
-Estrutura e configuração. Sem deploy.
-
-**Files:**
-- Create: `wrangler.toml`, `public/_headers`
-- Move: `index.html` e `static/` para `public/`
-- Delete: `vercel.json`, `.vercelignore`
-- Modify: `tests/server.js` (raiz default)
-
-**Interfaces:**
-- Consumes: estrutura estática das fases anteriores.
-- Produces: `public/` como raiz publicável; `tests/server.js` passa a servir `public/` por padrão.
-
-- [ ] **Step 1: Mover os arquivos publicáveis**
-
-```bash
-mkdir -p public
-git mv index.html public/index.html
-git mv static public/static
-```
-
-- [ ] **Step 2: Escrever `public/_headers`**
-
-```text
-/*
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
-
-/static/tenants/:slug/config.json
-  Cache-Control: public, max-age=0, must-revalidate
-
-/static/css/*
-  Cache-Control: public, max-age=0, must-revalidate
-
-/static/js/*
-  Cache-Control: public, max-age=0, must-revalidate
-```
-
-`img-src` precisa de `blob:` e `data:`: preview e exportação criam object URLs a partir do canvas. Sem isso o produto quebra.
-
-O `config.json` já é revalidável por padrão no Workers Static Assets; o header está declarado para tornar a política parte do contrato da aplicação e sobreviver a qualquer tentativa futura de otimizar cache.
-
-- [ ] **Step 3: Escrever `wrangler.toml`**
-
-```toml
-name = "avatar"
-compatibility_date = "2026-08-18"
-
-[assets]
-directory = "./public"
-not_found_handling = "single-page-application"
-```
-
-`single-page-application` faz `/gd` e `/joao` devolverem o mesmo `index.html` com HTTP 200; o tenant é resolvido no cliente.
-
-- [ ] **Step 4: Remover a configuração da Vercel**
-
-```bash
-git rm vercel.json
-git rm --ignore-unmatch .vercelignore
-```
-
-- [ ] **Step 5: Apontar o servidor de teste para `public/`**
-
-Em `tests/server.js`, trocar o default da raiz:
-
-```js
-  const raiz = path.resolve(process.argv[3] || path.join(__dirname, "..", "public"));
-```
-
-- [ ] **Step 6: Rodar tudo contra a nova estrutura**
-
-Run:
-```bash
-node tests/server.js 8000 &
-sleep 1
-node --test tests/tenant.test.js
-node tests/run.js http://127.0.0.1:8000/joao
-python tests/verify_migration.py
-```
-Expected: tudo PASS
-
-Ajustar em `tests/verify_migration.py` os caminhos que apontavam para `static/` na raiz, que agora vivem em `public/static/`.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add -A
-git commit -m "chore: estrutura public/ e config Cloudflare Workers Static Assets"
-```
-
----
-
-# FASE 6 — Documentação
-
-### Task 16: README
-
-**Files:**
-- Modify: `README.md`
-
-**Interfaces:**
-- Consumes: tudo.
-- Produces: procedimento replicável de onboarding de cliente.
-
-- [ ] **Step 1: Reescrever o README**
-
-Substituir o conteúdo por estas seções, nesta ordem:
-
-1. **O que é** — editor de arte de campanha, 100% client-side, multi-tenant.
-2. **Arquitetura** — core genérico + `TenantConfig`; diagrama da spec §28; regra de ouro: adicionar cliente, template ou asset nunca exige alterar o core.
-3. **Estrutura de diretórios** — `public/` publicável; `tests/`, `docs/`, `wrangler.toml` fora.
-4. **Como rodar localmente** — `node tests/server.js 8000` e abrir `http://127.0.0.1:8000/gd`.
-5. **Formatos oficiais** — tabela `quadrado` 1080×1080, `feed` 1080×1350, `story` 1080×1920; o tenant habilita, não define.
-6. **Como adicionar um novo cliente** — os 11 passos abaixo.
-7. **Como adicionar um template a um cliente existente** — nova pasta em `masks/`, nova entrada em `templates[]`, um asset por formato habilitado, incrementar `version`.
-8. **Como habilitar um formato novo** — acrescentar ao array `formats` **e** o asset correspondente em todo template, senão a validação recusa o config.
-9. **Cache** — `version` é o que quebra cache de asset; incrementar sempre que trocar arte.
-10. **Regras de segurança** — `config.json` é público; nunca guardar segredo; assets sempre relativos; nada de `../`, caminho absoluto ou URL externa.
-11. **Testes** — o que cada comando cobre.
-12. **Deploy Cloudflare** — `wrangler deploy`, `public/` como diretório de assets, SPA fallback; deixar explícito que o deploy ainda não foi executado.
-
-Os 11 passos da seção 6:
-
-```text
-1.  copiar static/tenants/_template para public/static/tenants/<slug>
-2.  escolher o slug (a-z, 0-9, hífen; sem maiúscula, espaço ou acento)
-3.  editar config.json (slug, brand, formats, templates, defaults)
-4.  substituir logo.png
-5.  adicionar os templates em masks/<template-id>/
-6.  adicionar o asset de cada formato habilitado
-7.  conferir defaults.template e defaults.format
-8.  incrementar version ao substituir qualquer asset
-9.  rodar node --test tests/tenant.test.js e node tests/run.js
-10. commit
-11. push
-```
-
-- [ ] **Step 2: Adicionar o checklist de publicação**
-
-```markdown
-## Checklist antes de publicar um cliente
-
-- [ ] slug em minúsculas, sem acento, sem espaço, fora da lista de reservados
-- [ ] `config.json` valida (`node --test tests/tenant.test.js`)
-- [ ] logo carrega
-- [ ] todos os templates aparecem
-- [ ] todos os formatos habilitados aparecem
-- [ ] cada template tem asset para cada formato habilitado
-- [ ] `defaults.template` e `defaults.format` existem
-- [ ] upload de foto, zoom, rotação, centralizar e download funcionam
-- [ ] o PNG sai com as dimensões do formato escolhido
-- [ ] nenhum asset de outro tenant é carregado (aba Network)
-- [ ] `version` incrementado se algum asset foi substituído
-```
-
-- [ ] **Step 3: Confirmar que o README não documenta mais o stack removido**
-
-Run: `grep -niE "flask|gunicorn|/api/render|vercel" README.md`
-Expected: nenhuma saída, ou apenas menção histórica explícita
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add README.md
-git commit -m "docs: README multi-tenant com onboarding de cliente"
-```
-
----
-
-## Critérios finais de aceite
-
-- [ ] `/gd` e `/joao` funcionam e usam o mesmo core
-- [ ] identidade e assets isolados entre tenants
-- [ ] nenhum literal `'gd'`, `'rosa'`, `'azul'` em `editor.js`
-- [ ] templates dinâmicos: 1, 2 e 5+ funcionam sem tocar no core
-- [ ] `quadrado` exporta 1080×1080, `feed` 1080×1350, `story` 1080×1920
-- [ ] preview e download continuam pixel-perfect equivalentes
-- [ ] EXIF, zoom, rotação e a correção de race condition seguem funcionando
-- [ ] trocar template preserva o enquadramento
-- [ ] trocar formato executa reset + autoFit
-- [ ] config inválida nunca inicializa o editor nem parcialmente
-- [ ] raiz do domínio mostra o placeholder comercial
-- [ ] novo cliente pode ser criado sem alterar `editor.js`
-- [ ] `public/`, `_headers` e `wrangler.toml` prontos, sem deploy executado
-- [ ] README documenta o onboarding completo
+Esse é o critério arquitetural principal da feature.
