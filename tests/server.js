@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
-const DEFAULT_ROOT = path.resolve(__dirname, "..");
+const DEFAULT_ROOT = path.resolve(__dirname, "..", "public");
 
 function pathDentroDaRaiz(base, alvo) {
   const relativo = path.relative(base, alvo);

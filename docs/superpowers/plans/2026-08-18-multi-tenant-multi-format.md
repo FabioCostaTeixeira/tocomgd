@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////////////////////......] 81.25%
-Tasks: 13/16
+Progresso: [////////////////////////////....] 87.5%
+Tasks: 14/16
 
 Atualização
 
@@ -492,7 +492,7 @@ concluída
 
 Cloudflare Workers Static Assets + public/
 
-pendente
+concluída
 
 15
 

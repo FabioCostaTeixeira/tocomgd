@@ -42,7 +42,7 @@ test("pathDentroDaRaiz rejeita saída e aceita raiz/filhos", () => {
 });
 
 test("servidor serve SPA, estáticos, 404 e protege traversal", async (t) => {
-  const server = createServer(path.resolve(__dirname, ".."));
+  const server = createServer(path.resolve(__dirname, "..", "public"));
   const port = await listen(server);
   t.after(() => server.close());
 

@@ -18,10 +18,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> None:
-    editor = read("static/js/editor.js")
-    tenant = read("static/js/tenant.js")
-    bootstrap = read("static/js/bootstrap.js")
-    html = read("index.html")
+    editor = read("public/static/js/editor.js")
+    tenant = read("public/static/js/tenant.js")
+    bootstrap = read("public/static/js/bootstrap.js")
+    html = read("public/index.html")
 
     require(re.search(r"(['\"])(gd|rosa|azul)\1", editor) is None, "core contém tenant/template hardcoded")
     require(re.search(r"\bconst\s+SIZE\b", editor) is None, "core ainda usa const SIZE")
@@ -55,10 +55,10 @@ def main() -> None:
     require('type="module" src="/static/js/bootstrap.js"' in html, "bootstrap não está ligado como módulo")
 
     for relative in (
-        "index.html",
-        "static/js/editor.js",
-        "static/js/tenant.js",
-        "static/js/bootstrap.js",
+        "public/index.html",
+        "public/static/js/editor.js",
+        "public/static/js/tenant.js",
+        "public/static/js/bootstrap.js",
         "tests/harness.js",
         "tests/run.js",
     ):

@@ -11,7 +11,7 @@ const {
   resolveAssetPath,
   validateConfig,
   loadTenant,
-} = require("../static/js/tenant.js");
+} = require("../public/static/js/tenant.js");
 
 function assertTenantError(callback, code) {
   assert.throws(callback, (error) => {

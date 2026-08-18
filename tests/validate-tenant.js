@@ -7,10 +7,10 @@ const {
   TenantError,
   resolveAssetPath,
   validateConfig,
-} = require("../static/js/tenant.js");
+} = require("../public/static/js/tenant.js");
 
 const ROOT = path.resolve(__dirname, "..");
-const TENANTS_ROOT = path.join(ROOT, "static", "tenants");
+const TENANTS_ROOT = path.join(ROOT, "public", "static", "tenants");
 
 function fail(message) {
   throw new Error(message);

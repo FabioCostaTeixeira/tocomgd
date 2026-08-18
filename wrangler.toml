@@ -1,0 +1,6 @@
+name = "avatar"
+compatibility_date = "2026-08-18"
+
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
