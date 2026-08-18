@@ -427,6 +427,89 @@ async function captureDownloadPng(cdp, timeoutMs) {
   return dataUrlToBuffer(result.result.value);
 }
 
+async function captureStaleExportState(cdp, timeoutMs) {
+  // Deixa um resultado anterior visível para garantir que a corrida não
+  // apenas evite o primeiro resultado, mas também não ressuscite um Blob
+  // obsoleto sobre um card já preenchido.
+  await captureDownloadPng(cdp, timeoutMs);
+  await waitForCondition(
+    cdp,
+    "document.getElementById('resultCard').hidden === false && !!document.getElementById('resultImage').getAttribute('src')",
+    timeoutMs,
+    10
+  );
+
+  const installResult = await cdp.send("Runtime.evaluate", {
+    expression: `
+      (function () {
+        const originalToBlob = HTMLCanvasElement.prototype.toBlob;
+        window.__lunaToBlobCompleted = false;
+        HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+          originalToBlob.call(this, (blob) => {
+            setTimeout(() => {
+              window.__lunaToBlobCompleted = true;
+              callback(blob);
+            }, 250);
+          }, type, quality);
+        };
+        return true;
+      })()
+    `,
+    returnByValue: true,
+  });
+  if (installResult.exceptionDetails) {
+    throw new Error(`Falha ao atrasar toBlob: ${describeException(installResult.exceptionDetails)}`);
+  }
+
+  await cdp.send("Runtime.evaluate", {
+    expression: "document.getElementById('downloadButton').click()",
+    userGesture: true,
+  });
+  await waitForCondition(
+    cdp,
+    "document.getElementById('downloadButton').disabled === true",
+    timeoutMs,
+    10
+  );
+
+  const mutateResult = await cdp.send("Runtime.evaluate", {
+    expression: `
+      (function () {
+        const zoom = document.getElementById('zoomRange');
+        zoom.value = '150';
+        zoom.dispatchEvent(new Event('input', { bubbles: true }));
+        return zoom.value;
+      })()
+    `,
+    returnByValue: true,
+  });
+  if (mutateResult.exceptionDetails) {
+    throw new Error(`Falha ao alterar zoom durante exportação: ${describeException(mutateResult.exceptionDetails)}`);
+  }
+
+  await waitForCondition(
+    cdp,
+    "window.__lunaToBlobCompleted === true && document.getElementById('downloadButton').disabled === false",
+    timeoutMs,
+    10
+  );
+
+  const stateResult = await cdp.send("Runtime.evaluate", {
+    expression: `
+      ({
+        resultHidden: document.getElementById('resultCard').hidden,
+        resultImageSrc: document.getElementById('resultImage').getAttribute('src'),
+        zoomValue: document.getElementById('zoomRange').value,
+      })
+    `,
+    returnByValue: true,
+  });
+  if (stateResult.exceptionDetails) {
+    throw new Error(`Falha ao ler resultado da corrida: ${describeException(stateResult.exceptionDetails)}`);
+  }
+  return stateResult.result.value;
+}
+
 // ---------------------------------------------------------------------
 // API pública
 // ---------------------------------------------------------------------
@@ -452,6 +535,7 @@ async function runCase({
   viewport,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   headless = true,
+  raceDuringExport = false,
 } = {}) {
   if (!url) throw new Error("runCase: parâmetro 'url' é obrigatório.");
   if (!photoPath) throw new Error("runCase: parâmetro 'photoPath' é obrigatório.");
@@ -506,6 +590,10 @@ async function runCase({
     );
 
     const previewPng = await capturePreviewPng(cdp);
+    if (raceDuringExport) {
+      const raceState = await captureStaleExportState(cdp, timeoutMs);
+      return { previewPng, raceState, networkRequests };
+    }
     const downloadPng = await captureDownloadPng(cdp, timeoutMs);
 
     return { previewPng, downloadPng, networkRequests };

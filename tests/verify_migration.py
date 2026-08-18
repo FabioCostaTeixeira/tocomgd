@@ -43,6 +43,19 @@ def main() -> None:
     require("Math.atan2" in js, "gesto não calcula ângulo")
     require("ROTATION_DEAD_ZONE" in js and "ROTATION_SNAP" in js, "zona morta/encaixe ausentes")
     require("invalidateResult" in js, "invalidação centralizada do resultado ausente")
+    require(
+        re.search(
+            r"function showResult\(blob, expectedStateVersion\).*?"
+            r"if \(expectedStateVersion !== editorStateVersion\) return false;",
+            js,
+            re.S,
+        ) is not None,
+        "showResult não rejeita blob de versão obsoleta",
+    )
+    require(
+        "if (!showResult(resultBlob, exportStateVersion)) return;" in js,
+        "exportação não valida a versão ao exibir o blob",
+    )
     require("personImage.naturalWidth" not in js and "personImage.naturalHeight" not in js, "editor depende de dimensões naturais")
 
     require("builds" not in vercel and "app.py" not in json.dumps(vercel), "Vercel ainda aponta para Python")

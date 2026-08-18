@@ -61,6 +61,7 @@
   let isBusy = false;
   let baseScale = 1;
   let person = { x: SIZE / 2, y: SIZE / 2, scale: 1, rotation: 0 };
+  let editorStateVersion = 0;
   let toastTimer = null;
 
   const pointers = new Map();
@@ -104,7 +105,7 @@
     }, 3200);
   }
 
-  function invalidateResult() {
+  function clearResult() {
     if (resultUrl) {
       URL.revokeObjectURL(resultUrl);
       resultUrl = null;
@@ -113,17 +114,25 @@
     if (resultCard) resultCard.hidden = true;
   }
 
+  function invalidateResult() {
+    editorStateVersion += 1;
+    clearResult();
+  }
+
   function isIOS() {
     return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   }
 
-  function showResult(blob) {
-    invalidateResult();
+  function showResult(blob, expectedStateVersion) {
+    if (expectedStateVersion !== editorStateVersion) return false;
+
+    clearResult();
     resultUrl = URL.createObjectURL(blob);
     resultImage.src = resultUrl;
     resultCard.hidden = false;
     resultHint.hidden = !isIOS();
+    return true;
   }
 
   function setBusy(busy, title = "Processando…", text = "") {
@@ -939,6 +948,7 @@
     setBusy(true, "Gerando a arte…", "Preparando o PNG em 1080×1080.");
 
     try {
+      const exportStateVersion = editorStateVersion;
       draw();
       const resultBlob = await new Promise((resolve, reject) => {
         canvas.toBlob((blob) => {
@@ -946,7 +956,8 @@
           else reject(new Error("Não foi possível gerar a imagem."));
         }, "image/png");
       });
-      showResult(resultBlob);
+
+      if (!showResult(resultBlob, exportStateVersion)) return;
 
       const link = document.createElement("a");
       link.href = resultUrl;

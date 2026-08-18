@@ -121,7 +121,22 @@ async function main() {
     assertExifMarkers(caseName, previewPath);
   }
 
-  console.log(`\nOK: ${cases.length} casos, WYSIWYG e rede verificados`);
+  process.stdout.write("\n> corrida de exportação com zoom\n");
+  const race = await runCase({
+    url,
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+    raceDuringExport: true,
+  });
+  if (!race.raceState || race.raceState.resultHidden !== true || race.raceState.resultImageSrc) {
+    throw new Error("corrida de exportação: resultCard exibiu blob obsoleto após mudança de zoom");
+  }
+  if (race.raceState.zoomValue !== "150") {
+    throw new Error("corrida de exportação: mudança de zoom não foi aplicada");
+  }
+
+  console.log(`\nOK: ${cases.length} casos, corrida de zoom, WYSIWYG e rede verificados`);
 }
 
 main().catch((error) => {
