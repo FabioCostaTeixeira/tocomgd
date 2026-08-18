@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [////////////////////////////////] 100%
-Tasks: 16/16
+Progresso: [////////........................] 25%
+Tasks: 4/16
 
 Atualização
 
@@ -371,8 +371,8 @@ plano ainda antigo
 
 6. Quadro de progresso
 
-Progresso: [////////........................] 25%
-Tasks: 4/16
+Progresso: [////////////////////////////////] 100%
+Tasks: 16/16
 
 #
 
