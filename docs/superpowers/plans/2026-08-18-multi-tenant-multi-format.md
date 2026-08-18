@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [////////////////////////........] 75%
-Tasks: 12/16
+Progresso: [//////////////////////////......] 81.25%
+Tasks: 13/16
 
 Atualização
 
@@ -484,7 +484,7 @@ concluída
 
 Verificador de migração
 
-pendente
+concluída
 
 14
 
