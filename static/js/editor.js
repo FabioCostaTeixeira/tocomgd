@@ -40,7 +40,14 @@
   const toastMessage = document.getElementById("toastMessage");
   const guideV = document.getElementById("guideV");
   const guideH = document.getElementById("guideH");
+  const formatGrid = document.getElementById("formatGrid");
   const maskRadios = [...document.querySelectorAll(".template-radio")];
+
+  const FORMAT_LABELS = {
+    quadrado: "Quadrado",
+    feed: "Feed",
+    story: "Story",
+  };
 
   const maskImages = {
     rosa: document.getElementById("maskRosa"),
@@ -166,6 +173,37 @@
       };
       draw();
     }
+
+    syncFormatChips();
+  }
+
+  function syncFormatChips() {
+    formatGrid.querySelectorAll("[data-format]").forEach((button) => {
+      const active = button.dataset.format === currentFormat;
+      button.setAttribute("aria-checked", String(active));
+    });
+  }
+
+  function renderFormats(formatIds) {
+    formatGrid.replaceChildren();
+
+    formatIds.forEach((formatId) => {
+      const format = FORMAT_DIMS[formatId];
+      if (!format) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "format-chip";
+      button.dataset.format = formatId;
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-checked", String(formatId === currentFormat));
+      button.setAttribute("aria-label", `${FORMAT_LABELS[formatId]} ${format.width} por ${format.height}`);
+      button.innerHTML = `<strong>${FORMAT_LABELS[formatId]}</strong><small>${format.width}×${format.height}</small>`;
+      button.addEventListener("click", () => setFormat(formatId));
+      formatGrid.appendChild(button);
+    });
+
+    syncFormatChips();
   }
 
   function setBusy(busy, title = "Processando…", text = "") {
@@ -1028,5 +1066,6 @@
   });
 
   applyMaskAccent();
+  renderFormats(Object.keys(FORMAT_DIMS));
   setFormat(currentFormat);
 })();

@@ -243,6 +243,75 @@ h1 {
   color: var(--text);
 }
 
+.format-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 16px 4px 9px;
+}
+
+.format-heading strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.format-heading span {
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.format-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.format-chip {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 8px 9px;
+  border: 1.5px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s var(--ease), background .18s var(--ease), color .18s var(--ease), transform .12s var(--ease);
+}
+
+.format-chip strong {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+.format-chip small {
+  color: inherit;
+  font-size: 10.5px;
+  line-height: 1.1;
+}
+
+.format-chip[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--surface-2);
+  color: var(--accent-2);
+}
+
+.format-chip:active { transform: scale(.98); }
+
+@media (hover: hover) and (pointer: fine) {
+  .format-chip:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+  }
+}
+
 .editor-column { display: grid; gap: 14px; }
 
 .editor-card {
@@ -256,7 +325,7 @@ h1 {
 .canvas-wrap {
   position: relative;
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: var(--canvas-aspect, 1);
   overflow: hidden;
   border-radius: var(--radius-lg);
   background: #fff;
@@ -620,6 +689,16 @@ h1 {
   .section-heading span {
     flex: none;
     max-width: none;
+    text-align: left;
+  }
+
+  .format-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .format-heading span {
     text-align: left;
   }
 }
