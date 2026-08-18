@@ -1,0 +1,32 @@
+{
+  "slug": "gd",
+  "version": "1",
+  "brand": {
+    "name": "GD",
+    "title": "Monte sua foto com GD!",
+    "description": "Escolha um modelo e personalize sua foto.",
+    "primaryColor": "#ec4899",
+    "secondaryColor": "#3b82f6"
+  },
+  "formats": ["quadrado"],
+  "templates": [
+    {
+      "id": "rosa",
+      "name": "Modelo Rosa",
+      "assets": {
+        "quadrado": "masks/rosa/quadrado.png"
+      }
+    },
+    {
+      "id": "azul",
+      "name": "Modelo Azul",
+      "assets": {
+        "quadrado": "masks/azul/quadrado.png"
+      }
+    }
+  ],
+  "defaults": {
+    "template": "rosa",
+    "format": "quadrado"
+  }
+}

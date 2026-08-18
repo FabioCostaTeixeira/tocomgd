@@ -1,0 +1,27 @@
+{
+  "slug": "joao",
+  "version": "1",
+  "brand": {
+    "name": "João",
+    "title": "Monte sua foto com João!",
+    "description": "Escolha um formato e personalize sua foto.",
+    "primaryColor": "#14b8a6",
+    "secondaryColor": "#0ea5e9"
+  },
+  "formats": ["quadrado", "feed", "story"],
+  "templates": [
+    {
+      "id": "principal",
+      "name": "Modelo Principal",
+      "assets": {
+        "quadrado": "masks/principal/quadrado.png",
+        "feed": "masks/principal/feed.png",
+        "story": "masks/principal/story.png"
+      }
+    }
+  ],
+  "defaults": {
+    "template": "principal",
+    "format": "quadrado"
+  }
+}

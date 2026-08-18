@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [////////////////................] 50%
-Tasks: 8/16
+Progresso: [//////////////////..............] 56.25%
+Tasks: 9/16
 
 Atualização
 
@@ -452,7 +452,7 @@ concluída
 
 Tenants de referência + validator
 
-pendente
+concluída
 
 10
 

@@ -1,0 +1,27 @@
+{
+  "slug": "_template",
+  "version": "1",
+  "brand": {
+    "name": "Novo cliente",
+    "title": "Monte sua foto",
+    "description": "",
+    "primaryColor": "#64748b",
+    "secondaryColor": "#94a3b8"
+  },
+  "formats": ["quadrado", "feed", "story"],
+  "templates": [
+    {
+      "id": "principal",
+      "name": "Modelo Principal",
+      "assets": {
+        "quadrado": "masks/principal/quadrado.png",
+        "feed": "masks/principal/feed.png",
+        "story": "masks/principal/story.png"
+      }
+    }
+  ],
+  "defaults": {
+    "template": "principal",
+    "format": "quadrado"
+  }
+}
