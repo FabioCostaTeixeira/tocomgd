@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////////////////////////..] 93.75%
-Tasks: 15/16
+Progresso: [////////////////////////////////] 100%
+Tasks: 16/16
 
 Atualização
 
@@ -508,7 +508,7 @@ concluída
 
 Gate final de entrega
 
-pendente
+concluída
 
 7. Estrutura alvo
 
