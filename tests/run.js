@@ -7,6 +7,10 @@ const { probePage, runCase } = require("./harness");
 
 const ROOT = path.resolve(__dirname, "..");
 const FIXTURES = path.join(__dirname, "fixtures");
+const EXPECTED_CSP = fs
+  .readFileSync(path.join(ROOT, "public", "_headers"), "utf8")
+  .match(/Content-Security-Policy:\s*(.+)/)?.[1]
+  ?.trim();
 const DEFAULT_CASES = [
   "12mp.jpg",
   "48mp.jpg",
@@ -87,6 +91,36 @@ function assertNoApiRequests(urls, caseName) {
   }
 }
 
+function getHeader(headers, name) {
+  const entry = Object.entries(headers || {}).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase()
+  );
+  return entry?.[1] || null;
+}
+
+function assertRealCsp(responseHeaders, caseName) {
+  const actualCsp = getHeader(responseHeaders, "content-security-policy");
+  const actualDirectives = new Map(
+    (actualCsp || "")
+      .split(";")
+      .map((directive) => directive.trim().split(/\s+/))
+      .filter(([name]) => name)
+      .map(([name, ...tokens]) => [name, new Set(tokens)])
+  );
+  const requiredDirectives = (EXPECTED_CSP || "")
+    .split(";")
+    .map((directive) => directive.trim().split(/\s+/))
+    .filter(([name]) => name);
+  const satisfiesRequiredCsp = requiredDirectives.every(([name, ...tokens]) => {
+    const actualTokens = actualDirectives.get(name);
+    return actualTokens && tokens.every((token) => actualTokens.has(token));
+  });
+
+  if (!satisfiesRequiredCsp) {
+    throw new Error(`${caseName}: a resposta da página não aplicou a CSP real de public/_headers`);
+  }
+}
+
 function assertExifMarkers(caseName, imagePath) {
   const match = /^exif([1-8])\.jpg$/.exec(caseName);
   if (!match) return;
@@ -135,6 +169,7 @@ async function main() {
         timeoutMs,
       });
       assertNoApiRequests(result.networkRequests, `${format}/${caseName}`);
+      assertRealCsp(result.responseHeaders, `${format}/${caseName}`);
 
       const previewPath = path.join(caseDir, "preview.png");
       const downloadPath = path.join(caseDir, "download.png");
@@ -169,6 +204,7 @@ async function main() {
   for (const route of ["/", "/gd", "/joao", "/inexistente", "/admin", "/Joao"]) {
     probes[route] = await probePage({ url: `${origin}${route}`, timeoutMs });
     assertNoApiRequests(probes[route].networkRequests, route);
+    assertRealCsp(probes[route].responseHeaders, route);
   }
   if (!probes["/"].state.landing || probes["/"].state.app || probes["/"].state.error ||
       !probes["/gd"].state.app || !probes["/joao"].state.app ||
@@ -177,7 +213,12 @@ async function main() {
     throw new Error(`estado de rotas inválido: ${JSON.stringify(Object.fromEntries(Object.entries(probes).map(([route, result]) => [route, result.state])))}`);
   }
   if (probes["/gd"].state.templates !== 2 || JSON.stringify(probes["/gd"].state.formats) !== JSON.stringify(["quadrado"]) ||
-      probes["/joao"].state.templates !== 1 || JSON.stringify(probes["/joao"].state.formats) !== JSON.stringify(["quadrado", "feed", "story"])) {
+      probes["/joao"].state.templates !== 1 || JSON.stringify(probes["/joao"].state.formats) !== JSON.stringify(["quadrado", "feed", "story"]) ||
+      probes["/gd"].state.title !== "Monte sua foto com GD!" ||
+      probes["/gd"].state.primaryColor !== "#ec4899" ||
+      probes["/joao"].state.title !== "Monte sua foto com João!" ||
+      probes["/joao"].state.primaryColor !== "#14b8a6" ||
+      probes["/joao"].state.logoLoaded !== true) {
     throw new Error("brand/configuração dinâmica não corresponde ao tenant");
   }
   const gdRequests = probes["/gd"].networkRequests.map((requestUrl) => new URL(requestUrl).pathname);
@@ -185,6 +226,37 @@ async function main() {
   if (gdRequests.some((requestPath) => requestPath.includes("/tenants/joao/")) ||
       joaoRequests.some((requestPath) => requestPath.includes("/tenants/gd/"))) {
     throw new Error("isolamento de assets entre tenants falhou");
+  }
+
+  process.stdout.write("\n> loading atrasado e falha fechada da máscara default\n");
+  const slowConfig = await probePage({
+    url: `${origin}/joao`,
+    timeoutMs,
+    lifecycle: "slow-config",
+  });
+  const slowMask = await probePage({
+    url: `${origin}/joao`,
+    timeoutMs,
+    lifecycle: "slow-default-mask",
+  });
+  const failedDefaultMask = await probePage({
+    url: `${origin}/joao`,
+    timeoutMs,
+    lifecycle: "default-mask-error",
+  });
+  if (slowConfig.during.loading !== false || slowConfig.during.app ||
+      slowConfig.state.loading !== true || !slowConfig.state.app ||
+      slowMask.during.loading !== false || slowMask.during.app ||
+      slowMask.during.maskState !== "loading" || slowMask.state.loading !== true ||
+      !slowMask.state.app || slowMask.state.maskState !== "ready" ||
+      failedDefaultMask.during.loading !== false || failedDefaultMask.during.app ||
+      failedDefaultMask.state.loading !== true || failedDefaultMask.state.app ||
+      !failedDefaultMask.state.error) {
+    throw new Error(`lifecycle de loading/máscara inválido: ${JSON.stringify({
+      slowConfig,
+      slowMask,
+      failedDefaultMask,
+    })}`);
   }
 
   process.stdout.write("\n> falha lazy de template sem unhandledrejection\n");

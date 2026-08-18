@@ -343,6 +343,42 @@ async function waitForCondition(cdp, expression, timeoutMs, intervalMs = 100) {
   }
 }
 
+function waitForFetchPause(cdp, matcher, timeoutMs, label) {
+  return withTimeout(
+    new Promise((resolve) => {
+      cdp.on("Fetch.requestPaused", (params) => {
+        if (matcher(params.request?.url || "")) resolve(params);
+      });
+    }),
+    timeoutMs,
+    label
+  );
+}
+
+async function readPageState(cdp) {
+  const result = await cdp.send("Runtime.evaluate", {
+    expression: `({
+      loading: document.getElementById("appLoading")?.hidden,
+      app: document.getElementById("appShell")?.hidden === false,
+      landing: document.getElementById("landing")?.hidden === false,
+      error: document.getElementById("tenantError")?.hidden === false,
+      errorTitle: document.getElementById("tenantErrorTitle")?.textContent,
+      title: document.title,
+      primaryColor: document.body.style.getPropertyValue("--brand-primary"),
+      templates: document.querySelectorAll("#templateGrid .template-card").length,
+      formats: [...document.querySelectorAll("#formatGrid [data-format]")].map((element) => element.dataset.format),
+      maskState: document.querySelector("canvas")?.dataset.maskState,
+      logoLoaded: (() => {
+        const logo = document.getElementById("brandLogo");
+        return Boolean(logo && !logo.hidden && logo.complete && logo.naturalWidth > 0);
+      })(),
+    })`,
+    returnByValue: true,
+  });
+  if (result.exceptionDetails) throw new Error(`Falha ao ler estado da página: ${describeException(result.exceptionDetails)}`);
+  return result.result.value;
+}
+
 async function selectPhotoFile(cdp, absPhotoPath) {
   const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
   const { nodeId } = await cdp.send("DOM.querySelector", {
@@ -637,6 +673,7 @@ async function runCase({
 
   const { child, port, userDataDir } = await launchChrome({ headless, viewport });
   const networkRequests = [];
+  let documentResponseHeaders = null;
 
   try {
     const cdp = await connectToPage(port);
@@ -648,6 +685,11 @@ async function runCase({
 
     cdp.on("Network.requestWillBeSent", (params) => {
       if (params?.request?.url) networkRequests.push(params.request.url);
+    });
+    cdp.on("Network.responseReceived", (params) => {
+      if (params?.type === "Document" && params.response?.headers) {
+        documentResponseHeaders = params.response.headers;
+      }
     });
 
     try {
@@ -683,7 +725,7 @@ async function runCase({
     const previewPng = await capturePreviewPng(cdp);
     if (raceDuringExport) {
       const raceState = await captureStaleExportState(cdp, timeoutMs);
-      return { previewPng, raceState, networkRequests };
+      return { previewPng, raceState, networkRequests, responseHeaders: documentResponseHeaders };
     }
 
     if (scenario === "template-preserve") {
@@ -693,6 +735,7 @@ async function runCase({
         previewPng,
         scenario: { beforeTemplatePng: previewPng, afterTemplatePng },
         networkRequests,
+        responseHeaders: documentResponseHeaders,
       };
     }
 
@@ -735,6 +778,7 @@ async function runCase({
         previewPng,
         scenario: { afterFormatPng, state: stateResult.result.value },
         networkRequests,
+        responseHeaders: documentResponseHeaders,
       };
     }
 
@@ -765,19 +809,24 @@ async function runCase({
         })`,
         returnByValue: true,
       });
-      return { previewPng, scenario: { state: stateResult.result.value }, networkRequests };
+      return {
+        previewPng,
+        scenario: { state: stateResult.result.value },
+        networkRequests,
+        responseHeaders: documentResponseHeaders,
+      };
     }
 
     const downloadPng = await captureDownloadPng(cdp, timeoutMs);
 
-    return { previewPng, downloadPng, networkRequests };
+    return { previewPng, downloadPng, networkRequests, responseHeaders: documentResponseHeaders };
   } finally {
     await killChromeTree(child);
     await removeDirWithRetry(userDataDir);
   }
 }
 
-async function probePage({ url, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function probePage({ url, timeoutMs = DEFAULT_TIMEOUT_MS, lifecycle = null } = {}) {
   if (!url) throw new Error("probePage: parâmetro 'url' é obrigatório.");
 
   const { child, port, userDataDir } = await launchChrome({
@@ -785,6 +834,7 @@ async function probePage({ url, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     viewport: { width: 1280, height: 1024 },
   });
   const networkRequests = [];
+  let documentResponseHeaders = null;
 
   try {
     const cdp = await connectToPage(port);
@@ -794,27 +844,73 @@ async function probePage({ url, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     cdp.on("Network.requestWillBeSent", (params) => {
       if (params?.request?.url) networkRequests.push(params.request.url);
     });
+    cdp.on("Network.responseReceived", (params) => {
+      if (params?.type === "Document" && params.response?.headers) {
+        documentResponseHeaders = params.response.headers;
+      }
+    });
+
+    if (lifecycle) {
+      const isConfig = lifecycle === "slow-config";
+      const isFailure = lifecycle === "default-mask-error";
+      const pattern = isConfig ? "*config.json*" : "*masks/*/quadrado.png*";
+      await cdp.send("Fetch.enable", {
+        patterns: [{ urlPattern: pattern, requestStage: "Request" }],
+      });
+
+      const pausedRequest = waitForFetchPause(
+        cdp,
+        (requestUrl) => requestUrl.includes(isConfig ? "config.json" : "/masks/"),
+        timeoutMs,
+        `requisição pausada de ${lifecycle}`
+      );
+      await cdp.send("Page.navigate", { url });
+      const paused = await pausedRequest;
+
+      await waitForCondition(
+        cdp,
+        "document.getElementById('appLoading')?.hidden === false && document.getElementById('appShell')?.hidden === true",
+        timeoutMs
+      );
+      const during = await readPageState(cdp);
+
+      if (isFailure) {
+        await cdp.send("Fetch.failRequest", {
+          requestId: paused.requestId,
+          errorReason: "Failed",
+        });
+        await waitForCondition(
+          cdp,
+          "document.getElementById('appLoading')?.hidden === true && document.getElementById('tenantError')?.hidden === false && document.getElementById('appShell')?.hidden === true",
+          timeoutMs
+        );
+      } else {
+        await cdp.send("Fetch.continueRequest", { requestId: paused.requestId });
+        await waitForCondition(
+          cdp,
+          "document.getElementById('appLoading')?.hidden === true && document.getElementById('appShell')?.hidden === false",
+          timeoutMs
+        );
+      }
+
+      return {
+        state: await readPageState(cdp),
+        during,
+        lifecycle,
+        networkRequests,
+        responseHeaders: documentResponseHeaders,
+      };
+    }
 
     const loadEventFired = cdp.once("Page.loadEventFired");
     await cdp.send("Page.navigate", { url });
     await withTimeout(loadEventFired, timeoutMs, `carregamento de ${url}`);
     await waitForCondition(cdp, "document.getElementById('appLoading')?.hidden === true", timeoutMs);
-
-    const stateResult = await cdp.send("Runtime.evaluate", {
-      expression: `({
-        loading: document.getElementById("appLoading")?.hidden,
-        app: document.getElementById("appShell")?.hidden === false,
-        landing: document.getElementById("landing")?.hidden === false,
-        error: document.getElementById("tenantError")?.hidden === false,
-        errorTitle: document.getElementById("tenantErrorTitle")?.textContent,
-        title: document.getElementById("brandTitle")?.textContent,
-        primaryColor: document.body.style.getPropertyValue("--brand-primary"),
-        templates: document.querySelectorAll("#templateGrid .template-card").length,
-        formats: [...document.querySelectorAll("#formatGrid [data-format]")].map((element) => element.dataset.format),
-      })`,
-      returnByValue: true,
-    });
-    return { state: stateResult.result.value, networkRequests };
+    return {
+      state: await readPageState(cdp),
+      networkRequests,
+      responseHeaders: documentResponseHeaders,
+    };
   } finally {
     await killChromeTree(child);
     await removeDirWithRetry(userDataDir);
