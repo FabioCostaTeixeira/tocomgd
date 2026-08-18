@@ -4,3 +4,9 @@ compatibility_date = "2026-08-18"
 [assets]
 directory = "./public"
 not_found_handling = "single-page-application"
+
+# Ambiente de teste, isolado do futuro deploy de produção.
+# `wrangler deploy --env dev` publica em avatar-dev.<subdominio>.workers.dev
+# sem afetar o worker "avatar" que produção usará.
+[env.dev]
+name = "avatar-dev"
