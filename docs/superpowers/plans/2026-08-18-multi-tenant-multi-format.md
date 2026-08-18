@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////......................] 31.25%
-Tasks: 5/16
+Progresso: [////////////....................] 37.5%
+Tasks: 6/16
 
 Atualização
 
@@ -428,7 +428,7 @@ concluída
 
 tenant.js — slug e assets seguros
 
-pendente
+concluída
 
 7
 
