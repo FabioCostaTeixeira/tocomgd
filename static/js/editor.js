@@ -1,5 +1,12 @@
-(() => {
-  "use strict";
+"use strict";
+
+export async function initEditor({
+  slug,
+  templates: initialTemplates,
+  formats: initialFormats,
+  defaultTemplate,
+  defaultFormat,
+}) {
 
   const FORMAT_DIMS = {
     quadrado: { width: 1080, height: 1080 },
@@ -41,8 +48,8 @@
   const toastMessage = document.getElementById("toastMessage");
   const guideV = document.getElementById("guideV");
   const guideH = document.getElementById("guideH");
+  const templateGrid = document.getElementById("templateGrid");
   const formatGrid = document.getElementById("formatGrid");
-  const maskRadios = [...document.querySelectorAll(".template-radio")];
 
   const FORMAT_LABELS = {
     quadrado: "Quadrado",
@@ -50,22 +57,22 @@
     story: "Story",
   };
 
-  const maskImages = {
-    rosa: document.getElementById("maskRosa"),
-    azul: document.getElementById("maskAzul"),
-  };
-
-  const maskReady = { rosa: false, azul: false };
-
   const TOAST_ICONS = {
     info: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 11v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="8" r="1" fill="currentColor"/></svg>',
     success: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M8 12.3l2.6 2.6L16 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     error: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7.5v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>',
   };
 
-  let selectedMask =
-    document.querySelector(".template-radio:checked")?.value || "rosa";
-  const tenantSlug = "cliente";
+  const tenantSlug = slug;
+  const formats = [...initialFormats];
+  const templates = [...initialTemplates];
+  const templateById = new Map(templates.map((template) => [template.id, template]));
+  const maskCache = new Map();
+  let currentTemplateId = null;
+  let currentMask = null;
+  let currentMaskKey = null;
+  let maskRequestVersion = 0;
+  let maskState = "idle";
   let personImage = null;
   let personW = 0;
   let personH = 0;
@@ -151,7 +158,7 @@
     return true;
   }
 
-  function setFormat(formatId) {
+  function setFormatState(formatId) {
     if (!FORMAT_DIMS[formatId]) return;
 
     currentFormat = formatId;
@@ -178,6 +185,17 @@
 
     syncFormatChips();
     syncDownloadLabel();
+  }
+
+  function setFormat(formatId) {
+    if (!formats.includes(formatId) || formatId === currentFormat) return;
+
+    setFormatState(formatId);
+
+    applyMask(currentTemplateId, currentFormat).catch((error) => {
+      console.error(error);
+      showToast("Não foi possível carregar a arte deste formato.", "error");
+    });
   }
 
   function syncDownloadLabel() {
@@ -213,24 +231,151 @@
     syncFormatChips();
   }
 
+  function syncTemplateCards() {
+    templateGrid.querySelectorAll(".template-radio").forEach((radio) => {
+      radio.checked = radio.value === currentTemplateId;
+      radio.setAttribute("aria-checked", String(radio.checked));
+    });
+  }
+
+  function renderTemplates() {
+    templateGrid.replaceChildren();
+
+    templates.forEach((template) => {
+      const label = document.createElement("label");
+      label.className = "template-card";
+
+      const input = document.createElement("input");
+      input.className = "sr-only template-radio";
+      input.type = "radio";
+      input.name = "campaignMask";
+      input.value = template.id;
+      input.setAttribute("role", "radio");
+      input.setAttribute("aria-checked", "false");
+
+      const preview = document.createElement("span");
+      preview.className = "template-preview";
+      const image = document.createElement("img");
+      image.src = template.assets[currentFormat] || template.assets[formats[0]];
+      image.alt = `Prévia do ${template.name}`;
+      image.loading = "lazy";
+      image.decoding = "async";
+      preview.appendChild(image);
+
+      const badge = document.createElement("span");
+      badge.className = "check-badge";
+      badge.setAttribute("aria-hidden", "true");
+      badge.innerHTML = '<svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      preview.appendChild(badge);
+
+      const name = document.createElement("span");
+      name.className = "template-name";
+      name.textContent = template.name;
+
+      label.append(input, preview, name);
+      input.addEventListener("change", () => {
+        if (input.checked) setTemplate(template.id);
+      });
+      templateGrid.appendChild(label);
+    });
+
+    syncTemplateCards();
+  }
+
+  function setTemplate(templateId) {
+    const template = templateById.get(templateId);
+    if (!template || templateId === currentTemplateId) return;
+
+    currentTemplateId = templateId;
+    syncTemplateCards();
+    invalidateResult();
+
+    applyMask(currentTemplateId, currentFormat).catch((error) => {
+      console.error(error);
+      showToast("Não foi possível carregar a arte deste modelo.", "error");
+    });
+  }
+
   function setBusy(busy, title = "Processando…", text = "") {
     isBusy = busy;
     processingTitle.textContent = title;
     processingText.textContent = text;
     processing.hidden = !busy;
     photoInput.disabled = busy;
-    maskRadios.forEach((radio) => {
+    templateGrid.querySelectorAll(".template-radio").forEach((radio) => {
       radio.disabled = busy;
     });
-    downloadButton.disabled = busy || !personImage;
+    syncDownloadAvailability();
   }
 
-  function currentMaskImage() {
-    return maskImages[selectedMask] || maskImages.rosa;
+  function syncDownloadAvailability() {
+    downloadButton.disabled = isBusy || !personImage || maskState !== "ready" || currentMask === null;
   }
 
-  function applyMaskAccent() {
-    document.body.dataset.mask = selectedMask;
+  function maskKey(templateId, formatId) {
+    return `${templateId}/${formatId}`;
+  }
+
+  function loadMask(templateId, formatId) {
+    const template = templateById.get(templateId);
+    const source = template?.assets?.[formatId];
+    if (!source) throw new Error("Máscara não configurada.");
+
+    if (!maskCache.has(source)) {
+      const promise = new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Máscara não encontrada."));
+        image.src = source;
+      }).catch((error) => {
+        maskCache.delete(source);
+        throw error;
+      });
+      maskCache.set(source, promise);
+    }
+
+    return maskCache.get(source);
+  }
+
+  async function applyMask(templateId, formatId) {
+    const requestVersion = ++maskRequestVersion;
+
+    currentMask = null;
+    currentMaskKey = null;
+    maskState = "loading";
+    canvas.dataset.maskState = "loading";
+    invalidateResult();
+    syncDownloadAvailability();
+    draw();
+
+    try {
+      const image = await loadMask(templateId, formatId);
+
+      if (
+        requestVersion !== maskRequestVersion ||
+        templateId !== currentTemplateId ||
+        formatId !== currentFormat
+      ) {
+        return false;
+      }
+
+      currentMask = image;
+      currentMaskKey = maskKey(templateId, formatId);
+      maskState = "ready";
+      canvas.dataset.maskState = "ready";
+      draw();
+      syncDownloadAvailability();
+      return true;
+    } catch (error) {
+      if (requestVersion !== maskRequestVersion) return false;
+
+      currentMask = null;
+      currentMaskKey = null;
+      maskState = "error";
+      canvas.dataset.maskState = "error";
+      syncDownloadAvailability();
+      throw error;
+    }
   }
 
   function draw() {
@@ -248,8 +393,8 @@
       ctx.restore();
     }
 
-    const mask = currentMaskImage();
-    if (mask && maskReady[selectedMask]) {
+    const mask = currentMask;
+    if (mask && maskState === "ready" && currentMaskKey === maskKey(currentTemplateId, currentFormat)) {
       ctx.drawImage(mask, 0, 0, dims.width, dims.height);
     }
 
@@ -519,17 +664,6 @@
 
   resetButton.addEventListener("click", autoFitPerson);
   rotateButton.addEventListener("click", rotatePersonBy90);
-
-  maskRadios.forEach((radio) => {
-    radio.addEventListener("change", () => {
-      if (!radio.checked) return;
-      selectedMask = radio.value;
-      applyMaskAccent();
-      invalidateResult();
-      draw();
-      showToast(selectedMask === "rosa" ? "Modelo Rosa selecionado." : "Modelo Azul selecionado.");
-    });
-  });
 
   // ---------------------------------------------------------------------
   // Task 4 — leitura leve de metadados (dimensões + orientação EXIF), sem
@@ -1039,7 +1173,7 @@
 
       const link = document.createElement("a");
       link.href = resultUrl;
-      link.download = `avatar-${tenantSlug}-${selectedMask}-${currentFormat}-${dims.width}x${dims.height}.png`;
+      link.download = `avatar-${tenantSlug}-${currentTemplateId}-${currentFormat}-${dims.width}x${dims.height}.png`;
       if (!isIOS()) {
         document.body.appendChild(link);
         link.click();
@@ -1053,26 +1187,18 @@
     }
   });
 
-  Object.entries(maskImages).forEach(([name, image]) => {
-    if (!image) return;
+  renderTemplates();
+  renderFormats(formats);
+  setFormatState(defaultFormat);
+  currentTemplateId = defaultTemplate;
+  syncTemplateCards();
 
-    image.addEventListener("load", () => {
-      maskReady[name] = true;
-      draw();
-    });
+  await applyMask(currentTemplateId, currentFormat);
 
-    image.addEventListener("error", () => {
-      maskReady[name] = false;
-      draw();
-      showToast(`A máscara ${name} não foi encontrada.`, "error");
-    });
+  if (maskState !== "ready" || !currentMask) {
+    throw new Error("Máscara default não ficou pronta.");
+  }
 
-    if (image.complete && image.naturalWidth > 0) {
-      maskReady[name] = true;
-    }
-  });
-
-  applyMaskAccent();
-  renderFormats(Object.keys(FORMAT_DIMS));
-  setFormat(currentFormat);
-})();
+  draw();
+  syncDownloadAvailability();
+}

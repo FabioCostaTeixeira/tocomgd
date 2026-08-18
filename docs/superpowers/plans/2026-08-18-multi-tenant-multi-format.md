@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [//////////////////..............] 56.25%
-Tasks: 9/16
+Progresso: [////////////////////............] 62.5%
+Tasks: 10/16
 
 Atualização
 
@@ -460,7 +460,7 @@ concluída
 
 Virada atômica: initEditor + templates + bootstrap + landing
 
-pendente
+concluída
 
 11
 

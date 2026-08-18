@@ -25,22 +25,6 @@
   --shadow-canvas: 0 24px 60px -24px rgba(0, 0, 0, .7);
 }
 
-body[data-mask="rosa"] {
-  --accent: #ec4899;
-  --accent-2: #f472b6;
-  --accent-soft: rgba(236, 72, 153, .16);
-  --accent-glow: rgba(236, 72, 153, .30);
-  --accent-text: #ffffff;
-}
-
-body[data-mask="azul"] {
-  --accent: #3b82f6;
-  --accent-2: #60a5fa;
-  --accent-soft: rgba(59, 130, 246, .16);
-  --accent-glow: rgba(59, 130, 246, .30);
-  --accent-text: #ffffff;
-}
-
 * { box-sizing: border-box; }
 
 html { background: var(--bg); }
@@ -48,11 +32,26 @@ html { background: var(--bg); }
 body {
   position: relative;
   margin: 0;
+  min-height: 100vh;
   min-height: 100dvh;
+  --brand-primary: #ec4899;
+  --brand-secondary: #3b82f6;
+  --accent: var(--brand-primary);
+  --accent-2: var(--brand-secondary);
+  --accent-soft: rgba(255, 255, 255, .16);
+  --accent-glow: rgba(255, 255, 255, .30);
+  --accent-text: #ffffff;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+  body {
+    --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+    --accent-glow: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
 }
 
 body::before {
@@ -89,6 +88,46 @@ label:focus-visible,
   margin: 0 auto;
   padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
   animation: rise .5s var(--ease) both;
+}
+
+.app-loading,
+.tenant-error,
+.landing {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.app-loading p,
+.tenant-error p,
+.landing p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.tenant-error h1,
+.landing h1 {
+  margin: 0;
+  font-size: clamp(28px, 8vw, 42px);
+  letter-spacing: -.04em;
+}
+
+.brand-logo {
+  display: block;
+  width: auto;
+  max-width: min(180px, 60%);
+  max-height: 64px;
+  margin: 0 0 12px 4px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 @keyframes rise {

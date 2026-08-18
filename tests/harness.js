@@ -361,6 +361,9 @@ async function selectPhotoFile(cdp, absPhotoPath) {
 }
 
 async function selectFormat(cdp, formatId, timeoutMs) {
+  const selector = `button[data-format='${formatId}']`;
+  await waitForCondition(cdp, `!!document.querySelector(${JSON.stringify(selector)})`, timeoutMs);
+
   const expression = `
     (function () {
       const button = document.querySelector(${JSON.stringify(`button[data-format="${formatId}"]`)});
@@ -380,7 +383,7 @@ async function selectFormat(cdp, formatId, timeoutMs) {
 
   await waitForCondition(
     cdp,
-    `document.querySelector("button[data-format='${formatId}']")?.getAttribute("aria-checked") === "true"`,
+    `document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-checked") === "true"`,
     timeoutMs
   );
 }

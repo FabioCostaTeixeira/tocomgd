@@ -5,14 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0a0d">
-  <title>Monte sua foto com GD!</title>
+  <title>Avatar</title>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body data-mask="rosa">
-  <main class="app-shell">
+<body>
+  <section class="app-loading" id="appLoading" aria-live="polite">
+    <p>Carregando editor…</p>
+  </section>
+
+  <section class="tenant-error" id="tenantError" hidden>
+    <h1 id="tenantErrorTitle">Cliente não encontrado</h1>
+    <p id="tenantErrorText">Verifique o endereço e tente novamente.</p>
+  </section>
+
+  <section class="landing" id="landing" hidden>
+    <h1>Avatar</h1>
+    <p>Personalize sua campanha.</p>
+    <p>Em breve.</p>
+  </section>
+
+  <main class="app-shell" id="appShell" hidden>
     <header class="app-header">
-      <h1>Monte sua foto com GD!</h1>
-      <p>Escolha um modelo e envie uma foto já com fundo branco, transparente ou recortada. Depois é só ajustar o enquadramento.</p>
+      <img id="brandLogo" class="brand-logo" alt="" hidden>
+      <h1 id="brandTitle"></h1>
+      <p id="brandDescription"></p>
     </header>
 
     <section class="template-section" aria-labelledby="templateTitle">
@@ -21,40 +37,7 @@
         <span>A troca não altera o enquadramento da foto</span>
       </div>
 
-      <div class="template-grid" role="radiogroup" aria-label="Modelos de campanha">
-        <label class="template-card">
-          <input
-            class="sr-only template-radio"
-            type="radio"
-            name="campaignMask"
-            value="rosa"
-            checked
-          >
-          <span class="template-preview">
-            <img src="/static/img/mascara-rosa-v1.png" alt="Prévia do modelo rosa">
-            <span class="check-badge" aria-hidden="true">
-              <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-          </span>
-          <span class="template-name">Modelo Rosa</span>
-        </label>
-
-        <label class="template-card">
-          <input
-            class="sr-only template-radio"
-            type="radio"
-            name="campaignMask"
-            value="azul"
-          >
-          <span class="template-preview">
-            <img src="/static/img/mascara-azul-v1.png" alt="Prévia do modelo azul">
-            <span class="check-badge" aria-hidden="true">
-              <svg viewBox="0 0 20 20" fill="none"><path d="M4.5 10.5L8 14l7.5-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-          </span>
-          <span class="template-name">Modelo Azul</span>
-        </label>
-      </div>
+      <div id="templateGrid" class="template-grid" role="radiogroup" aria-label="Modelos de campanha"></div>
 
       <div class="format-heading">
         <strong id="formatTitle">2. Escolha o formato</strong>
@@ -146,7 +129,7 @@
 
       <button class="button button-primary download-button" type="button" id="downloadButton" disabled>
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v1.5A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span id="downloadLabel">Baixar imagem 1080×1080</span>
+        <span id="downloadLabel">Baixar imagem</span>
       </button>
 
       <div class="result-card" id="resultCard" hidden>
@@ -160,20 +143,6 @@
       A foto é processada no seu próprio aparelho e não é enviada para nenhum servidor.
     </p>
 
-    <img
-      id="maskRosa"
-      src="/static/img/mascara-rosa-v1.png"
-      alt=""
-      hidden
-      crossorigin="anonymous"
-    >
-    <img
-      id="maskAzul"
-      src="/static/img/mascara-azul-v1.png"
-      alt=""
-      hidden
-      crossorigin="anonymous"
-    >
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden>
@@ -181,6 +150,7 @@
     <span id="toastMessage"></span>
   </div>
 
-  <script src="/static/js/editor.js" defer></script>
+  <script src="/static/js/tenant.js" defer></script>
+  <script type="module" src="/static/js/bootstrap.js"></script>
 </body>
 </html>

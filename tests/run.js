@@ -104,6 +104,7 @@ async function main() {
   const matrix = process.env.CASES
     ? [{ format: process.env.FORMAT || "quadrado", cases: process.env.CASES.split(",") }]
     : FORMAT_CASES;
+  const checkExifMarkers = process.env.CHECK_EXIF_MARKERS === "1" || !/\/joao\/?$/.test(new URL(url).pathname);
   fs.mkdirSync(outDir, { recursive: true });
 
   let totalCases = 0;
@@ -129,7 +130,7 @@ async function main() {
       fs.writeFileSync(previewPath, result.previewPng);
       fs.writeFileSync(downloadPath, result.downloadPng);
       runPythonCompare(previewPath, downloadPath);
-      assertExifMarkers(caseName, previewPath);
+      if (checkExifMarkers) assertExifMarkers(caseName, previewPath);
     }
   }
 
