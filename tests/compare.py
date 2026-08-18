@@ -282,6 +282,23 @@ def cmd_corners(path: str) -> int:
     return 0
 
 
+def cmd_crop_compare(path_a: str, path_b: str, box: tuple[int, int, int, int]) -> int:
+    img_a = Image.open(path_a).convert("RGB").crop(box)
+    img_b = Image.open(path_b).convert("RGB").crop(box)
+    if img_a.size != img_b.size:
+        print("ERRO: recortes com dimensões diferentes", file=sys.stderr)
+        return 1
+    diff = ImageChops.difference(img_a, img_b)
+    r, g, b = diff.split()
+    mask = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    different = img_a.size[0] * img_a.size[1] - mask.histogram()[0]
+    if different:
+        print(f"DIFF CROP: {different} pixels diferentes", file=sys.stderr)
+        return 1
+    print(f"OK CROP: {img_a.size[0]}x{img_a.size[1]}, 0 pixels diferentes")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
 
@@ -290,6 +307,17 @@ def main(argv: list[str] | None = None) -> int:
             print("uso: compare.py --corners <imagem>", file=sys.stderr)
             return 2
         return cmd_corners(args[1])
+
+    if args and args[0] == "--crop":
+        if len(args) != 7:
+            print("uso: compare.py --crop <a> <b> <x> <y> <w> <h>", file=sys.stderr)
+            return 2
+        try:
+            box = tuple(int(value) for value in args[3:])
+        except ValueError:
+            print("ERRO: recorte inválido", file=sys.stderr)
+            return 2
+        return cmd_crop_compare(args[1], args[2], box)
 
     if len(args) != 2:
         print("uso: compare.py <imagem_a> <imagem_b>", file=sys.stderr)

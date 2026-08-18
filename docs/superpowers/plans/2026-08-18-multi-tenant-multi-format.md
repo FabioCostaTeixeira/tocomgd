@@ -333,8 +333,8 @@ Assim não há arredondamento visual subjetivo.
 
 Exemplo 4/16:
 
-Progresso: [////////////////////............] 62.5%
-Tasks: 10/16
+Progresso: [//////////////////////..........] 68.75%
+Tasks: 11/16
 
 Atualização
 
@@ -468,7 +468,7 @@ concluída
 
 Comportamento de troca sem sleeps
 
-pendente
+concluída
 
 12
 

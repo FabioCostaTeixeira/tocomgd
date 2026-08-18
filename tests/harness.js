@@ -386,6 +386,43 @@ async function selectFormat(cdp, formatId, timeoutMs) {
     `document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-checked") === "true"`,
     timeoutMs
   );
+  await waitForMaskReady(cdp, timeoutMs);
+}
+
+async function waitForMaskReady(cdp, timeoutMs) {
+  await waitForCondition(
+    cdp,
+    `document.querySelector("canvas")?.dataset.maskState === "ready"`,
+    timeoutMs
+  );
+}
+
+async function selectTemplate(cdp, templateId, timeoutMs) {
+  const selector = `input.template-radio[value='${templateId}']`;
+  await waitForCondition(cdp, `!!document.querySelector(${JSON.stringify(selector)})`, timeoutMs);
+
+  const result = await cdp.send("Runtime.evaluate", {
+    expression: `
+      (function () {
+        const input = document.querySelector(${JSON.stringify(selector)});
+        if (!input) throw new Error("Template não encontrado: ${templateId}");
+        input.click();
+        return true;
+      })()
+    `,
+    returnByValue: true,
+    userGesture: true,
+  });
+  if (result.exceptionDetails) {
+    throw new Error(`Falha ao selecionar template ${templateId}: ${describeException(result.exceptionDetails)}`);
+  }
+
+  await waitForCondition(
+    cdp,
+    `document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-checked") === "true"`,
+    timeoutMs
+  );
+  await waitForMaskReady(cdp, timeoutMs);
 }
 
 async function capturePreviewPng(cdp) {
@@ -565,6 +602,7 @@ async function runCase({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   headless = true,
   raceDuringExport = false,
+  scenario = null,
 } = {}) {
   if (!url) throw new Error("runCase: parâmetro 'url' é obrigatório.");
   if (!photoPath) throw new Error("runCase: parâmetro 'photoPath' é obrigatório.");
@@ -624,6 +662,59 @@ async function runCase({
       const raceState = await captureStaleExportState(cdp, timeoutMs);
       return { previewPng, raceState, networkRequests };
     }
+
+    if (scenario === "template-preserve") {
+      await selectTemplate(cdp, "azul", timeoutMs);
+      const afterTemplatePng = await capturePreviewPng(cdp);
+      return {
+        previewPng,
+        scenario: { beforeTemplatePng: previewPng, afterTemplatePng },
+        networkRequests,
+      };
+    }
+
+    if (scenario === "format-reset") {
+      const mutateResult = await cdp.send("Runtime.evaluate", {
+        expression: `
+          (function () {
+            const zoom = document.getElementById("zoomRange");
+            zoom.value = "175";
+            zoom.dispatchEvent(new Event("input", { bubbles: true }));
+            document.getElementById("artCanvas").focus();
+            document.getElementById("artCanvas").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+            document.getElementById("rotateButton").click();
+            return zoom.value;
+          })()
+        `,
+        returnByValue: true,
+        userGesture: true,
+      });
+      if (mutateResult.exceptionDetails) {
+        throw new Error(`Falha ao preparar estado para troca de formato: ${describeException(mutateResult.exceptionDetails)}`);
+      }
+
+      await selectFormat(cdp, "story", timeoutMs);
+      const afterFormatPng = await capturePreviewPng(cdp);
+      const stateResult = await cdp.send("Runtime.evaluate", {
+        expression: `({
+          width: document.getElementById("artCanvas").width,
+          height: document.getElementById("artCanvas").height,
+          zoom: document.getElementById("zoomRange").value,
+          maskState: document.querySelector("canvas")?.dataset.maskState,
+          formatChecked: document.querySelector("button[data-format='story']")?.getAttribute("aria-checked"),
+        })`,
+        returnByValue: true,
+      });
+      if (stateResult.exceptionDetails) {
+        throw new Error(`Falha ao ler estado da troca de formato: ${describeException(stateResult.exceptionDetails)}`);
+      }
+      return {
+        previewPng,
+        scenario: { afterFormatPng, state: stateResult.result.value },
+        networkRequests,
+      };
+    }
+
     const downloadPng = await captureDownloadPng(cdp, timeoutMs);
 
     return { previewPng, downloadPng, networkRequests };

@@ -51,6 +51,17 @@ function runPythonCompare(preview, download) {
   }
 }
 
+function runPythonCropCompare(first, second, box) {
+  const result = spawnSync(
+    process.env.PYTHON || "python",
+    [path.join(__dirname, "compare.py"), "--crop", first, second, ...box.map(String)],
+    { encoding: "utf8" }
+  );
+  process.stdout.write(result.stdout || "");
+  process.stderr.write(result.stderr || "");
+  if (result.status !== 0) throw new Error("comparação de enquadramento falhou");
+}
+
 function runPythonCorners(imagePath) {
   const result = spawnSync(
     process.env.PYTHON || "python",
@@ -152,7 +163,54 @@ async function main() {
     }
   }
 
-  console.log(`\nOK: ${totalCases} casos, 2 corridas de zoom, WYSIWYG e rede verificados`);
+  const origin = new URL(url).origin;
+  process.stdout.write("\n> troca de template preserva enquadramento (gd)\n");
+  const templateSwap = await runCase({
+    url: `${origin}/gd`,
+    format: "quadrado",
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+    scenario: "template-preserve",
+  });
+  const templateDir = path.join(outDir, "swaps", "template");
+  fs.mkdirSync(templateDir, { recursive: true });
+  const beforeTemplate = path.join(templateDir, "before.png");
+  const afterTemplate = path.join(templateDir, "after.png");
+  fs.writeFileSync(beforeTemplate, templateSwap.scenario.beforeTemplatePng);
+  fs.writeFileSync(afterTemplate, templateSwap.scenario.afterTemplatePng);
+  runPythonCropCompare(beforeTemplate, afterTemplate, [100, 100, 600, 560]);
+
+  process.stdout.write("\n> troca de formato reseta enquadramento (joao)\n");
+  const formatSwap = await runCase({
+    url: `${origin}/joao`,
+    format: "quadrado",
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+    scenario: "format-reset",
+  });
+  const storyBaseline = await runCase({
+    url: `${origin}/joao`,
+    format: "story",
+    photoPath: path.join(FIXTURES, "12mp.jpg"),
+    viewport: { width: 1280, height: 1024, deviceScaleFactor: 1 },
+    timeoutMs,
+  });
+  const formatDir = path.join(outDir, "swaps", "format");
+  fs.mkdirSync(formatDir, { recursive: true });
+  const afterFormat = path.join(formatDir, "after.png");
+  const baselineFormat = path.join(formatDir, "baseline.png");
+  fs.writeFileSync(afterFormat, formatSwap.scenario.afterFormatPng);
+  fs.writeFileSync(baselineFormat, storyBaseline.previewPng);
+  runPythonCompare(afterFormat, baselineFormat);
+  if (formatSwap.scenario.state.width !== 1080 || formatSwap.scenario.state.height !== 1920 ||
+      formatSwap.scenario.state.zoom !== "100" || formatSwap.scenario.state.maskState !== "ready" ||
+      formatSwap.scenario.state.formatChecked !== "true") {
+    throw new Error(`troca de formato não resetou estado: ${JSON.stringify(formatSwap.scenario.state)}`);
+  }
+
+  console.log(`\nOK: ${totalCases} casos, 2 corridas de zoom, 2 regras de troca, WYSIWYG e rede verificados`);
 }
 
 main().catch((error) => {
