@@ -156,7 +156,7 @@ label{transition:color .2s}
   </main>
   <footer><div class="container footer-row"><div>© <span id="year"></span> Avatar</div><div>Ativação digital de apoiadores.</div></div></footer>
   <script>
-    const WHATSAPP_NUMBER = "55SEUNUMERO";
+    const WHATSAPP_NUMBER = "5531996569799";
     const supporters=document.getElementById("supporters"),views=document.getElementById("views"),potentialViews=document.getElementById("potentialViews");
     const formatNumber=v=>new Intl.NumberFormat("pt-BR").format(v);
     function updateCalculator(){const s=Math.max(0,Number(supporters.value||0)),v=Math.max(0,Number(views.value||0));potentialViews.textContent=formatNumber(s*v);const box=potentialViews.closest(".calc-result");if(box){box.classList.remove("ping");void box.offsetWidth;box.classList.add("ping")}potentialViews.style.transform="scale(1.06)";requestAnimationFrame(()=>{potentialViews.style.transform="scale(1)"})}
