@@ -1,5 +1,6 @@
 name = "avatar"
 compatibility_date = "2026-08-18"
+main = "src/index.js"
 
 [assets]
 directory = "./public"
