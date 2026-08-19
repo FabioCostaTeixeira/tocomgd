@@ -140,12 +140,15 @@ label{transition:color .2s}
     <section class="showcase-section reveal" aria-label="Exemplos visuais do Avatar">
       <div class="container">
         <div class="showcase-frame tilt">
-          <img
-            src="/static/img/landing-showcase.png"
-            alt="Exemplos fictícios de foto de perfil, publicação de feed e story criados para demonstrar o Avatar, com número de campanha 12345."
-            loading="lazy"
-            decoding="async"
-          />
+          <picture>
+            <source srcset="/static/img/landing-showcase.webp" type="image/webp" />
+            <img
+              src="/static/img/landing-showcase.png"
+              alt="Exemplos fictícios de foto de perfil, publicação de feed e story criados para demonstrar o Avatar, com número de campanha 12345."
+              loading="lazy"
+              decoding="async"
+            />
+          </picture>
         </div>
       </div>
     </section>
