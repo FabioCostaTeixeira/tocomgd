@@ -4,7 +4,12 @@ main = "src/index.js"
 
 [assets]
 directory = "./public"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
+# Sem isso, o Cloudflare Assets serve public/index.html direto em "/"
+# (arquivo existe) sem nunca invocar src/index.js, e a landing page
+# nunca aparece na raiz do site.
+run_worker_first = true
 
 # Ambiente de teste, isolado do futuro deploy de produção.
 # `wrangler deploy --env dev` publica em avatar-dev.<subdominio>.workers.dev
